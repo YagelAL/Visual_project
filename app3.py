@@ -14,8 +14,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
 # Base directory path
-base_dir = r"C:\Users\nacha\OneDrive\Desktop\school stuff\year 3 semester 1\visualization\vis proj\second try"
+# base_dir = r"C:\Users\nacha\OneDrive\Desktop\school stuff\year 3 semester 1\visualization\vis proj\second try"
+# base_dir = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Month mappings
 months = {
