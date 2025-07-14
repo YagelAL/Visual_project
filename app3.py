@@ -206,7 +206,7 @@ def main():
 
 
     # Raw data table
-    with st.expander("View The Raw Data"):
+    with st.expander("View Raw Data"):
         st.dataframe(
             summary[['station_name','departures','arrivals']].assign(
                 diff=lambda df: df['departures'] - df['arrivals']
