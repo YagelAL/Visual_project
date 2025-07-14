@@ -203,8 +203,10 @@ def main():
     st.plotly_chart(fig_trend, use_container_width=True)
 
 
+
+
     # Raw data table
-    with st.expander("View Raw Data"):
+    with st.expander("View The Raw Data"):
         st.dataframe(
             summary[['station_name','departures','arrivals']].assign(
                 diff=lambda df: df['departures'] - df['arrivals']
