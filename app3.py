@@ -2,13 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import requests
 import os
 from sklearn.cluster import DBSCAN
-from matplotlib import cm
-from matplotlib.colors import Normalize, to_hex
-from datetime import datetime, date
+from datetime import date
 
-# Set page config
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="NYC Citibike Station Balance Visualization",
     page_icon="🚲",
@@ -16,10 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Base directory path
-base_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Month mappings
+# ── Month mappings ─────────────────────────────────────────────────────────────
 months = {
     "202409": "September 2024",
     "202412": "December 2024",
@@ -27,192 +23,192 @@ months = {
     "202506": "June 2025"
 }
 
+# ── Load processed data ────────────────────────────────────────────────────────
 @st.cache_data
 def load_processed_data():
-    """Load all processed data files"""
     data = {}
-    for month_code, month_name in months.items():
-        file_path = os.path.join(base_dir, f"processed_{month_code}.csv")
-        if os.path.exists(file_path):
-            df = pd.read_csv(file_path)
-            df['date'] = pd.to_datetime(df['date']).dt.date
-            data[month_code] = df
-        else:
-            st.warning(f"Data file not found for {month_name}: {file_path}")
+    for code in months:
+        fp = f"processed_{code}.csv"
+        if os.path.exists(fp):
+            df = pd.read_csv(fp)
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+            df = df[df["date"] != date(2024, 8, 31)]
+            data[code] = df
     return data
 
-def create_map_visualization(df, selected_date):
-    """Create map visualization showing aggregated station gains/losses"""
-    date_data = df[df['date'] == selected_date].copy()
-    if date_data.empty:
-        st.error(f"No data available for {selected_date}")
-        return None
+# ── Fetch weather via Open-Meteo ───────────────────────────────────────────────
+@st.cache_data
+def load_weather(start_date: date, end_date: date):
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": 40.7128,
+        "longitude": -74.0060,
+        "daily": ["temperature_2m_max", "relativehumidity_2m_max"],
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "timezone": "America/New_York"
+    }
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    d = r.json()["daily"]
+    return pd.DataFrame({
+        "date": pd.to_datetime(d["time"]).dt.date,
+        "temperature": d["temperature_2m_max"],
+        "humidity": d["relativehumidity_2m_max"]
+    })
 
-    # Compute difference for coloring
-    date_data['diff'] = date_data['departures'] - date_data['arrivals']
+# ── Create clustered map ────────────────────────────────────────────────────────
+def create_map_visualization(df_day, radius_m, categories):
+    df_day["diff"] = df_day["departures"] - df_day["arrivals"]
+    df_day = df_day.dropna(subset=["lat", "lng"])
+    coords = np.radians(df_day[["lat", "lng"]].to_numpy())
+    eps = (radius_m / 1000) / 6371.0088
+    df_day["cluster"] = DBSCAN(eps=eps, min_samples=1,
+                               algorithm="ball_tree", metric="haversine")\
+        .fit_predict(coords)
 
-    # Normalize diff values for colormap
-    max_abs = date_data['diff'].abs().max()
-    norm = Normalize(vmin=-max_abs, vmax=max_abs)
-    colormap = cm.get_cmap("RdYlGn")
-
-    # Apply colors
-    date_data['color'] = date_data['diff'].apply(lambda x: to_hex(colormap(norm(x))))
-
-    # Cluster stations within 100m using DBSCAN (haversine metric requires radians)
-    coords = date_data[['lat', 'lng']].to_numpy()
-    kms_per_radian = 6371.0088
-    epsilon = 0.1 / kms_per_radian  # 0.1 km = 100 m
-    db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine')
-    date_data['cluster'] = db.fit_predict(np.radians(coords))
-
-    # Aggregate per cluster
-    agg = date_data.groupby('cluster').agg({
-        'lat': 'mean',
-        'lng': 'mean',
-        'arrivals': 'sum',
-        'departures': 'sum',
-        'station_name': lambda names: ', '.join(names[:3])
-    }).reset_index()
-    agg['diff'] = agg['departures'] - agg['arrivals']
-
-    # Size scaling (min 4, max 20)
-    abs_diff = agg['diff'].abs()
-    pct95 = np.percentile(abs_diff, 95) if not abs_diff.empty else 1
-    agg['size'] = 4 + (abs_diff / pct95 * 16)
-    agg['size'] = np.clip(agg['size'], 4, 20)
-
-    # Colors for aggregated clusters
-    agg['color'] = agg['diff'].apply(lambda x: to_hex(colormap(norm(x))))
-
-    # Hover text
-    agg['hover_text'] = agg.apply(
-        lambda row: (
-            f"<b>{row['station_name']}</b><br>"
-            f"Departures: {int(row['departures'])}<br>"
-            f"Arrivals: {int(row['arrivals'])}<br>"
-            f"Diff: {int(row['diff'])}"
-        ), axis=1
+    agg = (
+        df_day.groupby("cluster")
+              .agg({
+                  "lat": "mean",
+                  "lng": "mean",
+                  "arrivals": "sum",
+                  "departures": "sum",
+                  "station_name": lambda names: ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
+              })
+              .reset_index()
     )
+    agg["diff"] = agg["departures"] - agg["arrivals"]
+    agg["hover"] = agg["station_name"]
 
-    # Build Mapbox figure
     fig = go.Figure()
-    fig.add_trace(go.Scattermapbox(
-        lat=agg['lat'],
-        lon=agg['lng'],
-        mode='markers',
-        marker=dict(
-            size=agg['size'],
-            color=agg['color'],
-            opacity=0.7,
-            sizemode='diameter'
-        ),
-        text=agg['hover_text'],
-        hovertemplate='%{text}<extra></extra>',
-        name='Clusters',
-        showlegend=False
-    ))
+    for name, mask, color in [
+        ("More departures", agg["diff"] > 0, "green"),
+        ("More arrivals",   agg["diff"] < 0, "red"),
+        ("Balanced",        agg["diff"] == 0, "yellow")
+    ]:
+        if name in categories:
+            sub = agg[mask]
+            if not sub.empty:
+                fig.add_trace(go.Scattermapbox(
+                    lat=sub["lat"], lon=sub["lng"], mode="markers",
+                    marker=dict(size=12, color=color, opacity=0.8),
+                    text=sub["hover"], hovertemplate="%{text}<extra></extra>",
+                    name=name
+                ))
+
     fig.update_layout(
         mapbox=dict(
-            accesstoken='pk.eyJ1Ijoia2xvb20iLCJhIjoiY21jd2FiMWMyMDBlaDJsc2VxaW50Z2ttcCJ9.eYdMHhxN1no9KMtxEUZDGg',
-            style='mapbox://styles/mapbox/streets-v11',
-            center=dict(lat=40.7589, lon=-73.9851),
-            zoom=11
+            style="open-street-map",
+            center=dict(lat=40.7128, lon=-74.0060),
+            zoom=11,
+            bounds=dict(north=40.9176, south=40.4774,
+                        east=-73.7004, west=-74.2591)
         ),
-        height=600,
-        margin=dict(l=0, r=0, t=0, b=0)
+        uirevision="station_map",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="left", x=0,
+            font=dict(size=14),
+            bordercolor="black", borderwidth=1,
+            itemclick="toggleothers", itemdoubleclick="toggle"
+        ),
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=600
     )
     return fig
 
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    st.title("🚲 NYC Citibike Station Balance Visualization")
-    st.markdown("Visualize which areas gained or lost bikes at the end of each day (clusters within 100m)")
+    st.title("NYC Citibike Station Balance Visualization")
 
-    # Load data
-    with st.spinner("Loading data..."):
-        processed_data = load_processed_data()
-    if not processed_data:
-        st.error("No processed data found. Please run the preprocessing script first.")
+    data = load_processed_data()
+    if not data:
+        st.error("No data loaded.")
         return
 
-    # Sidebar controls
-    st.sidebar.header("Controls")
-    months_available = list(processed_data.keys())
-    selected_month = st.sidebar.selectbox(
-        "Select Month:",
-        options=months_available,
-        format_func=lambda x: months[x],
-        index=0
+    # combine all dates
+    combined = pd.concat(data.values(), ignore_index=True)
+    dates = sorted(combined["date"].unique())
+
+    # ── Calendar in sidebar ──────────────────────────────────────────────────────
+    st.sidebar.header("Select Date")
+    selected_date = st.sidebar.date_input(
+        "", value=dates[0], min_value=dates[0], max_value=dates[-1]
     )
 
-    month_data = processed_data[selected_month]
-    dates = sorted(month_data['date'].unique())
-    selected_date = st.sidebar.selectbox(
-        "Select Date:",
-        options=dates,
-        format_func=lambda d: d.strftime("%Y-%m-%d (%A)"),
-        index=len(dates)//2
-    )
+    # ── Sidebar controls ─────────────────────────────────────────────────────────
+    st.sidebar.header("Map Options")
+    radius_m = st.sidebar.slider("Clustering radius (m):", 100, 200, 100, 10)
+    show_dep = st.sidebar.checkbox("More departures", True)
+    show_arr = st.sidebar.checkbox("More arrivals", True)
+    show_bal = st.sidebar.checkbox("Balanced", True)
+    categories = [
+        name for name, chk in zip(
+            ["More departures", "More arrivals", "Balanced"],
+            [show_dep, show_arr, show_bal]
+        ) if chk
+    ]
 
-    # Summary metrics
-    summary = month_data[month_data['date'] == selected_date]
-    if not summary.empty:
-        total = len(summary)
-        st.sidebar.subheader("Summary Statistics")
-        st.sidebar.metric("Total Active Stations", total)
-        net_total = summary['departures'].sum() - summary['arrivals'].sum()
-        st.sidebar.metric("Total Net Diff", f"{int(net_total):+d} bikes")
+    # ── Map ─────────────────────────────────────────────────────────────────────
+    st.subheader(f"Station Map — {selected_date.strftime('%d/%m/%y')}")
+    df_day = combined[combined["date"] == selected_date]
+    if df_day.empty:
+        st.warning("No Citibike data for this date.")
+    else:
+        fig_map = create_map_visualization(df_day, radius_m, categories)
+        st.plotly_chart(fig_map, use_container_width=True, key="station_map")
 
-    # Main layout
-    col1, col2 = st.columns([3,1])
-    with col1:
-        st.subheader(f"Station Balance Map - {months[selected_month]}")
-        st.caption(f"Date: {selected_date.strftime('%Y-%m-%d (%A)')}")
-        fig = create_map_visualization(month_data, selected_date)
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        st.subheader("Legend & Info")
-        st.markdown("""
-        🟢 **Green**: More departures than arrivals  
-        🔴 **Red**: More arrivals than departures  
-        **Darker colors** indicate larger imbalance  
-        Stations are grouped if they are within 100 m.
-        """)
-
-    # Monthly trend chart
-    st.subheader("Monthly Trends")
-    daily = month_data.groupby('date').agg({
-        'departures': 'sum',
-        'arrivals': 'sum'
-    }).reset_index()
-    daily['net_diff'] = daily['departures'] - daily['arrivals']
-    fig_trend = go.Figure()
-    fig_trend.add_trace(go.Scatter(
-        x=daily['date'],
-        y=daily['net_diff'],
-        mode='lines+markers',
-        name='Daily Net Diff'
-    ))
-    fig_trend.update_layout(
-        title=f"Daily Net Difference Trend - {months[selected_month]}",
-        xaxis_title="Date",
-        yaxis_title="Bikes (Departures - Arrivals)",
-        height=400
-    )
-    st.plotly_chart(fig_trend, use_container_width=True)
-
-
-
-
-    # Raw data table
-    with st.expander("View Raw Data"):
-        st.dataframe(
-            summary[['station_name','departures','arrivals']].assign(
-                diff=lambda df: df['departures'] - df['arrivals']
-            ).sort_values('diff', ascending=False),
-            use_container_width=True
+    # ── Monthly Trend ───────────────────────────────────────────────────────────
+    st.subheader("Monthly Trend")
+    month_code = selected_date.strftime("%Y%m")
+    if month_code in data:
+        df_month = data[month_code]
+        daily = df_month.groupby("date").agg({
+            "departures": "sum", "arrivals": "sum"
+        }).reset_index()
+        daily["net"] = daily["departures"] - daily["arrivals"]
+        fig_trend = go.Figure(go.Scatter(
+            x=daily["date"], y=daily["net"], mode="lines+markers"
+        ))
+        fig_trend.update_layout(
+            xaxis_title="Date",
+            yaxis_title="Net Change (Departures − Arrivals)"
         )
+        fig_trend.update_xaxes(tickformat="%d/%m/%y")
+        st.plotly_chart(fig_trend, use_container_width=True)
+    else:
+        st.info("No monthly data for selected date.")
+
+    # ── Total Rides per Month ────────────────────────────────────────────────────
+    st.subheader("Total Rides per Month")
+    rides = [int(df["departures"].sum()) for df in data.values()]
+    fig_rides = go.Figure(go.Bar(x=list(months.values()), y=rides))
+    fig_rides.update_layout(
+        xaxis_title="Month",
+        yaxis_title="Total Departures (Rides)"
+    )
+    st.plotly_chart(fig_rides, use_container_width=True)
+
+    # ── Daily Temperature & Humidity ────────────────────────────────────────────
+    st.subheader("Daily Temperature & Humidity")
+    weather = load_weather(dates[0], dates[-1])
+    fig_weather = go.Figure()
+    fig_weather.add_trace(go.Scatter(
+        x=weather["date"], y=weather["temperature"],
+        mode="lines+markers", name="Temp (°C)"
+    ))
+    fig_weather.add_trace(go.Bar(
+        x=weather["date"], y=weather["humidity"],
+        name="Humidity (%)", opacity=0.5
+    ))
+    fig_weather.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Temp / Humidity",
+        legend=dict(orientation="h", y=1.02, x=0)
+    )
+    fig_weather.update_xaxes(tickformat="%d/%m/%y")
+    st.plotly_chart(fig_weather, use_container_width=True)
 
 if __name__ == "__main__":
     main()
