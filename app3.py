@@ -145,10 +145,10 @@ def create_timeline_map(combined, start_date, end_date, radius_m, categories):
                   })
                   .reset_index()
         )
-        agg["diff"] = agg["departures"] - agg["arrivals"]
+        agg["diff"]  = agg["departures"] - agg["arrivals"]
         agg["hover"] = agg["station_name"]
 
-        data_traces = []
+        traces = []
         for name, mask, color in [
             ("More departures", agg["diff"] > 0, "green"),
             ("More arrivals",   agg["diff"] < 0, "red"),
@@ -156,16 +156,15 @@ def create_timeline_map(combined, start_date, end_date, radius_m, categories):
         ]:
             if name in categories:
                 sub = agg[mask]
-                data_traces.append(go.Scattermapbox(
+                traces.append(go.Scattermapbox(
                     lat=sub["lat"], lon=sub["lng"], mode="markers",
                     marker=dict(size=12, color=color, opacity=0.8),
                     text=sub["hover"], hovertemplate="%{text}<extra></extra>",
                     name=name, showlegend=False
                 ))
 
-        frames.append(go.Frame(data=data_traces, name=d.strftime('%Y-%m-%d')))
+        frames.append(go.Frame(data=traces, name=d.strftime('%Y-%m-%d')))
 
-    # build the animated figure
     fig = go.Figure(
         data=frames[0].data if frames else [],
         frames=frames,
@@ -174,8 +173,10 @@ def create_timeline_map(combined, start_date, end_date, radius_m, categories):
                 style="open-street-map",
                 center=dict(lat=40.7128, lon=-74.0060),
                 zoom=11,
-                bounds=dict(north=40.9176, south=40.4774,
-                            east=-73.7004, west=-74.2591)
+                bounds=dict(
+                    north=40.9176, south=40.4774,
+                    east=-73.7004, west=-74.2591
+                )
             ),
             uirevision="station_map",
             legend=dict(
@@ -185,43 +186,59 @@ def create_timeline_map(combined, start_date, end_date, radius_m, categories):
                 bordercolor="black", borderwidth=1
             ),
             margin=dict(l=0, r=0, t=0, b=0),
-            height=600,
+            height=700,
+
             updatemenus=[dict(
-                type="buttons", showactive=False,
-                y=0, x=1.05, xanchor="right", yanchor="top",
-                pad=dict(t=0, r=10),
+                type="buttons",
+                direction="left",
+                showactive=False,
+                x=0.5,
+                y=-0.05,
+                xanchor="center",
+                yanchor="top",
+                pad=dict(t=10, b=5, l=5, r=5),
                 buttons=[
-                    dict(label="Play",
-                         method="animate",
-                         args=[None, {
-                             "frame": {"duration": 500, "redraw": True},
-                             "fromcurrent": True, "transition": {"duration": 0}
-                         }]),
-                    dict(label="Pause",
-                         method="animate",
-                         args=[[None], {
-                             "frame": {"duration": 0, "redraw": False},
-                             "mode": "immediate", "transition": {"duration": 0}
-                         }])
+                    dict(
+                        label="Play",
+                        method="animate",
+                        args=[None, {
+                            "frame": {"duration": 500, "redraw": True},
+                            "fromcurrent": True,
+                            "transition": {"duration": 0}
+                        }]
+                    ),
+                    dict(
+                        label="Pause",
+                        method="animate",
+                        args=[[None], {
+                            "frame": {"duration": 0, "redraw": False},
+                            "mode": "immediate",
+                            "transition": {"duration": 0}
+                        }]
+                    )
                 ]
             )],
+
             sliders=[dict(
                 steps=[
-                    dict(method="animate",
-                         args=[[f.name], {
-                             "frame": {"duration": 0, "redraw": True},
-                             "mode": "immediate"
-                         }],
-                         label=f.name)
-                    for f in frames
+                    dict(
+                        method="animate",
+                        args=[[f.name], {
+                            "frame": {"duration": 0, "redraw": True},
+                            "mode": "immediate"
+                        }],
+                        label=f.name
+                    ) for f in frames
                 ],
                 transition={"duration": 0},
-                x=0, y=0,
+                x=0,
+                y=-0.2,
                 currentvalue={"prefix": "Date: "},
-                pad={"b": 10, "t": 50}
+                pad={"t": 20, "b": 10}
             )]
         )
     )
+
     return fig
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -253,14 +270,14 @@ def main():
         ) if chk
     ]
 
-    # ── Static Map ──────────────────────────────────────────────────────────────
     if mode == "Static Map":
+        # ── Main Map ──────────────────────────────────────────────────────────────
         st.sidebar.header("Select Date")
         selected_date = st.sidebar.date_input(
             "", value=dates[0], min_value=dates[0], max_value=dates[-1]
         )
 
-        st.subheader(f"Station Map — {selected_date.strftime('%d/%m/%y')}")
+        st.subheader(f"Main Map — {selected_date.strftime('%d/%m/%y')}")
         df_day = combined[combined["date"] == selected_date]
         if df_day.empty:
             st.warning("No Citibike data for this date.")
@@ -268,15 +285,69 @@ def main():
             fig_map = create_map_visualization(df_day, radius_m, categories)
             st.plotly_chart(fig_map, use_container_width=True, key="station_map")
 
-    # ── Timeline Map ────────────────────────────────────────────────────────────
+        # ── Monthly Trend ───────────────────────────────────────────────────────
+        st.subheader("Monthly Trend")
+        month_code = selected_date.strftime("%Y%m")
+        if month_code in data:
+            df_month = data[month_code]
+            daily_net = (
+                df_month.groupby("date")
+                        .agg({"departures": "sum", "arrivals": "sum"})
+                        .reset_index()
+            )
+            daily_net["net"] = daily_net["departures"] - daily_net["arrivals"]
+            fig_trend = go.Figure(go.Scatter(
+                x=daily_net["date"], y=daily_net["net"], mode="lines+markers"
+            ))
+            fig_trend.update_layout(
+                xaxis_title="Date",
+                yaxis_title="Net Change (Departures − Arrivals)"
+            )
+            fig_trend.update_xaxes(tickformat="%d/%m/%y")
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info("No monthly data for selected date.")
+
+        # ── Total Rides per Month ────────────────────────────────────────────────
+        st.subheader("Total Rides per Month")
+        rides = [int(df["departures"].sum()) for df in data.values()]
+        fig_rides = go.Figure(go.Bar(
+            x=list(months.values()), y=rides
+        ))
+        fig_rides.update_layout(
+            xaxis_title="Month",
+            yaxis_title="Total Departures (Rides)"
+        )
+        st.plotly_chart(fig_rides, use_container_width=True)
+
+        # ── Daily Temperature & Humidity ─────────────────────────────────────────
+        st.subheader("Daily Temperature & Humidity")
+        weather = load_weather(dates[0], dates[-1])
+        fig_weather = go.Figure()
+        fig_weather.add_trace(go.Scatter(
+            x=weather["date"], y=weather["temperature"],
+            mode="lines+markers", name="Temp (°C)"
+        ))
+        fig_weather.add_trace(go.Bar(
+            x=weather["date"], y=weather["humidity"],
+            name="Humidity (%)", opacity=0.5
+        ))
+        fig_weather.update_layout(
+            xaxis_title="Date",
+            yaxis_title="Temp / Humidity",
+            legend=dict(orientation="h", y=1.02, x=0)
+        )
+        fig_weather.update_xaxes(tickformat="%d/%m/%y")
+        st.plotly_chart(fig_weather, use_container_width=True)
+
     else:
+        # ── Timeline Map ─────────────────────────────────────────────────────────
         st.sidebar.header("Select Date Range (max 14 days)")
         default_end = dates[13] if len(dates) > 14 else dates[-1]
         dr = st.sidebar.date_input(
             "", value=(dates[0], default_end),
             min_value=dates[0], max_value=dates[-1]
         )
-        # unpack range
         if isinstance(dr, (list, tuple)) and len(dr) == 2:
             start_date, end_date = dr
         else:
@@ -312,68 +383,6 @@ def main():
             fig_daily.update_xaxes(tickformat="%d/%m/%y")
             st.subheader("Daily Rides in Range")
             st.plotly_chart(fig_daily, use_container_width=True)
-
-    # ── Monthly Trend ───────────────────────────────────────────────────────────
-    st.subheader("Monthly Trend")
-    # choose reference date for month
-    if mode == "Static Map":
-        ref_date = selected_date
-    else:
-        # if timeline invalid, fallback to first date
-        ref_date = locals().get("start_date", dates[0])
-    month_code = ref_date.strftime("%Y%m")
-    if month_code in data:
-        df_month = data[month_code]
-        daily_net = (
-            df_month.groupby("date")
-                    .agg({"departures": "sum", "arrivals": "sum"})
-                    .reset_index()
-        )
-        daily_net["net"] = daily_net["departures"] - daily_net["arrivals"]
-        fig_trend = go.Figure(go.Scatter(
-            x=daily_net["date"], y=daily_net["net"], mode="lines+markers"
-        ))
-        fig_trend.update_layout(
-            xaxis_title="Date",
-            yaxis_title="Net Change (Departures − Arrivals)"
-        )
-        fig_trend.update_xaxes(tickformat="%d/%m/%y")
-        st.plotly_chart(fig_trend, use_container_width=True)
-    else:
-        st.info("No monthly data for selected period.")
-
-    # ── Total Rides per Month ────────────────────────────────────────────────────
-    st.subheader("Total Rides per Month")
-    rides = [int(df["departures"].sum()) for df in data.values()]
-    fig_rides = go.Figure(go.Bar(
-        x=list(months.values()), y=rides
-    ))
-    fig_rides.update_layout(
-        xaxis_title="Month",
-        yaxis_title="Total Departures (Rides)"
-    )
-    st.plotly_chart(fig_rides, use_container_width=True)
-
-    # ── Daily Temperature & Humidity ────────────────────────────────────────────
-    st.subheader("Daily Temperature & Humidity")
-    weather = load_weather(dates[0], dates[-1])
-    fig_weather = go.Figure()
-    fig_weather.add_trace(go.Scatter(
-        x=weather["date"], y=weather["temperature"],
-        mode="lines+markers", name="Temp (°C)"
-    ))
-    fig_weather.add_trace(go.Bar(
-        x=weather["date"], y=weather["humidity"],
-        name="Humidity (%)", opacity=0.5
-    ))
-    fig_weather.update_layout(
-        xaxis_title="Date",
-        yaxis_title="Temp / Humidity",
-        legend=dict(orientation="h", y=1.02, x=0)
-    )
-    fig_weather.update_xaxes(tickformat="%d/%m/%y")
-    st.plotly_chart(fig_weather, use_container_width=True)
-
 
 if __name__ == "__main__":
     main()
