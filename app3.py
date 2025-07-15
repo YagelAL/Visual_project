@@ -101,7 +101,7 @@ def prepare_time_series_data(combined):
 
 # ── Time Series Clustering ─────────────────────────────────────────────────────
 @st.cache_data
-def perform_time_series_clustering(pivot_net_filtered, n_clusters, station_coords, method='kmeans'):
+def perform_time_series_clustering(pivot_net_filtered, n_clusters, station_coords):
     # Prepare data for time series clustering
     ts_data = pivot_net_filtered.values
 
@@ -109,35 +109,9 @@ def perform_time_series_clustering(pivot_net_filtered, n_clusters, station_coord
     scaler = StandardScaler()
     ts_data_scaled = scaler.fit_transform(ts_data)
 
-    if method == 'kmeans':
-        # Method 1: Use K-means on the time series data directly
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        cluster_labels = kmeans.fit_predict(ts_data_scaled)
-        model = kmeans
-
-    elif method == 'hierarchical':
-        # Method 2: Use hierarchical clustering with correlation distance
-        correlation_matrix = np.corrcoef(ts_data_scaled)
-        # Convert correlation to distance (1 - abs(correlation))
-        distance_matrix = 1 - np.abs(correlation_matrix)
-        np.fill_diagonal(distance_matrix, 0)
-
-        # Ensure distance matrix is valid
-        distance_matrix = np.maximum(distance_matrix, 0)
-
-        # Perform hierarchical clustering
-        linkage_matrix = linkage(squareform(distance_matrix), method='ward')
-        cluster_labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust') - 1
-        model = linkage_matrix
-
-    else:  # 'pca_kmeans'
-        # Method 3: Use PCA + K-means for dimensionality reduction
-        pca = PCA(n_components=min(10, ts_data_scaled.shape[1]))
-        ts_data_pca = pca.fit_transform(ts_data_scaled)
-
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        cluster_labels = kmeans.fit_predict(ts_data_pca)
-        model = (pca, kmeans)
+    # Use K-means on the time series data directly
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    cluster_labels = kmeans.fit_predict(ts_data_scaled)
 
     # Create results dataframe
     results = pd.DataFrame({
@@ -149,35 +123,59 @@ def perform_time_series_clustering(pivot_net_filtered, n_clusters, station_coord
     results = results.merge(station_coords, on='station_name', how='left')
     results = results.dropna(subset=['lat', 'lng'])
 
-    return results, model
+    return results, kmeans
 
 
-# ── K-means Clustering ─────────────────────────────────────────────────────────
+# ── Improved Spatial K-means Clustering (Balanced) ──────────────────────────────────────
 @st.cache_data
-def perform_kmeans_clustering(combined, selected_date, n_clusters):
+def perform_spatial_balanced_clustering(combined, selected_date, n_clusters):
     # Get data for selected date
     df_day = combined[combined["date"] == selected_date].copy()
     df_day = df_day.dropna(subset=["lat", "lng", "departures", "arrivals"])
 
     if df_day.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
-    # Prepare features for clustering
-    features = ['departures', 'arrivals', 'lat', 'lng']
-    X = df_day[features].values
+    # Calculate net balance for each station
+    df_day['net_balance'] = df_day['departures'] - df_day['arrivals']
 
-    # Standardize features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # First, cluster purely on spatial coordinates
+    spatial_features = ['lat', 'lng']
+    X_spatial = df_day[spatial_features].values
 
-    # Perform K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    cluster_labels = kmeans.fit_predict(X_scaled)
+    # Standardize spatial features
+    spatial_scaler = StandardScaler()
+    X_spatial_scaled = spatial_scaler.fit_transform(X_spatial)
 
-    # Add cluster labels to dataframe
-    df_day['cluster'] = cluster_labels
+    # Perform spatial clustering
+    spatial_kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    # Add 1 to cluster labels to start naming from 1 instead of 0
+    spatial_clusters = spatial_kmeans.fit_predict(X_spatial_scaled) + 1
+    df_day['cluster'] = spatial_clusters
 
-    return df_day
+    # Get cluster centroids in original coordinates
+    centroids_scaled = spatial_kmeans.cluster_centers_
+    centroids_original = spatial_scaler.inverse_transform(centroids_scaled)
+
+    # Create centroids dataframe with clusters named from 1 to n_clusters
+    centroids_df = pd.DataFrame({
+        'cluster': range(1, n_clusters + 1),
+        'centroid_lat': centroids_original[:, 0],
+        'centroid_lng': centroids_original[:, 1]
+    })
+
+    # Calculate cluster statistics
+    cluster_stats = df_day.groupby('cluster').agg({
+        'net_balance': 'sum',
+        'departures': 'sum',
+        'arrivals': 'sum',
+        'station_name': 'count'
+    }).reset_index()
+
+    # Add centroids to results
+    centroids_df = centroids_df.merge(cluster_stats, on='cluster')
+
+    return df_day, centroids_df
 
 
 # ── Static‐Map visualizer ───────────────────────────────────────────────────────
@@ -291,8 +289,8 @@ def create_time_series_cluster_map(cluster_results):
     return fig
 
 
-# ── K-means Clustering Map ─────────────────────────────────────────────────────
-def create_kmeans_cluster_map(cluster_results):
+# ── Improved Spatial K-means Clustering Map ─────────────────────────────────────────────
+def create_spatial_cluster_map(cluster_results, centroids_df=None):
     if cluster_results.empty:
         return go.Figure()
 
@@ -301,6 +299,7 @@ def create_kmeans_cluster_map(cluster_results):
 
     fig = go.Figure()
 
+    # Add station points
     for cluster_id in sorted(cluster_results['cluster'].unique()):
         cluster_data = cluster_results[cluster_results['cluster'] == cluster_id]
 
@@ -309,16 +308,60 @@ def create_kmeans_cluster_map(cluster_results):
             lon=cluster_data['lng'],
             mode='markers',
             marker=dict(
-                size=10,
-                color=colors[cluster_id % len(colors)],
-                opacity=0.8
+                size=8,
+                # Adjust color index since clusters start from 1
+                color=colors[(cluster_id - 1) % len(colors)],
+                opacity=0.6
             ),
             text=cluster_data['station_name'],
             hovertemplate="<b>%{text}</b><br>Cluster: " + str(cluster_id) +
-                          "<br>Departures: %{customdata[0]}<br>Arrivals: %{customdata[1]}<extra></extra>",
-            customdata=cluster_data[['departures', 'arrivals']].values,
-            name=f"Cluster {cluster_id}"
+                          "<br>Net Balance: %{customdata[0]}<br>Departures: %{customdata[1]}<br>Arrivals: %{customdata[2]}<extra></extra>",
+            customdata=cluster_data[['net_balance', 'departures', 'arrivals']].values,
+            name=f"Cluster {cluster_id} Stations",
+            showlegend=False
         ))
+
+    # Add centroids if available
+    if centroids_df is not None and not centroids_df.empty:
+        for _, centroid in centroids_df.iterrows():
+            cluster_id = int(centroid['cluster'])
+            # Get the color for the current cluster
+            cluster_color = colors[(cluster_id - 1) % len(colors)]
+
+            # Plot a larger black circle first to act as a border
+            fig.add_trace(go.Scattermapbox(
+                lat=[centroid['centroid_lat']],
+                lon=[centroid['centroid_lng']],
+                mode='markers',
+                marker=dict(
+                    size=22,
+                    color='black',
+                    symbol='circle'
+                ),
+                hoverinfo='none',
+                showlegend=False
+            ))
+
+            # Plot the main, colored centroid circle on top
+            fig.add_trace(go.Scattermapbox(
+                lat=[centroid['centroid_lat']],
+                lon=[centroid['centroid_lng']],
+                mode='markers',
+                marker=dict(
+                    size=18,
+                    color=cluster_color,  # Use the cluster's color
+                    symbol='circle',  # Always use a circle
+                    opacity=0.9
+                ),
+                text=[f"Cluster {cluster_id} Centroid"],
+                hovertemplate="<b>%{text}</b><br>" +
+                              f"Net Balance: {centroid['net_balance']:+.0f}<br>" +
+                              f"Stations: {centroid['station_name']}<br>" +
+                              f"Total Departures: {centroid['departures']}<br>" +
+                              f"Total Arrivals: {centroid['arrivals']}<extra></extra>",
+                name=f"Cluster {cluster_id} Centroid",
+                showlegend=True
+            ))
 
     fig.update_layout(
         mapbox=dict(
@@ -329,9 +372,10 @@ def create_kmeans_cluster_map(cluster_results):
                         east=-73.7004, west=-74.2591)
         ),
         legend=dict(
+            title_text='Centroids',  # Add a title to the legend
             orientation="h", yanchor="bottom", y=1.02,
             xanchor="left", x=0,
-            font=dict(size=14),
+            font=dict(size=12),
             bordercolor="black", borderwidth=1
         ),
         margin=dict(l=0, r=0, t=0, b=0),
@@ -506,20 +550,14 @@ def main():
         st.subheader("Time Series Clustering Map")
         st.markdown("#### Time Series Clustering Controls")
         ts_clusters = st.selectbox("Time Series Clusters:", list(range(1, 7)), index=2, key="ts_clusters")
-        ts_method = st.selectbox("Time Series Method:", ["kmeans", "hierarchical", "pca_kmeans"],
-                                 format_func=lambda x: {
-                                     "kmeans": "K-means",
-                                     "hierarchical": "Hierarchical",
-                                     "pca_kmeans": "PCA + K-means"
-                                 }[x], key="ts_method")
 
-        st.write(f"Stations clustered by similar temporal patterns using {ts_method.replace('_', ' ').title()} method")
+        st.write(f"Stations clustered by similar temporal patterns using K-means method")
 
         try:
             pivot_net_filtered, station_coords = prepare_time_series_data(combined)
             if len(pivot_net_filtered) > 0:
                 ts_cluster_results, ts_model = perform_time_series_clustering(
-                    pivot_net_filtered, ts_clusters, station_coords, ts_method
+                    pivot_net_filtered, ts_clusters, station_coords
                 )
                 fig_ts = create_time_series_cluster_map(ts_cluster_results)
                 st.plotly_chart(fig_ts, use_container_width=True, key="ts_cluster_map")
@@ -559,35 +597,133 @@ def main():
         except Exception as e:
             st.error(f"Error in time series clustering: {str(e)}")
 
-        # ── K-means Clustering ────────────────────────
-        st.subheader("K-means Clustering Map")
-        st.markdown("#### K-means Clustering Controls")
-        kmeans_clusters = st.selectbox("K-means Clusters:", list(range(1, 7)), index=3, key="kmeans_clusters")
-        st.write(f"Stations clustered by daily activity patterns over a 30-day window from {selected_date.strftime('%d/%m/%y')}")
+        # ── Spatial K-means Clustering (Balanced) ─────────────────────────
+        st.subheader("Spatial Balanced Clustering Map")
+        st.markdown("#### Spatial Balanced Clustering Controls")
+        spatial_clusters = st.selectbox("Spatial Clusters:", list(range(2, 8)), index=2, key="spatial_clusters")
+
+        # REMOVED THE DESCRIPTIVE TEXT THAT MENTIONED TRIANGLES
 
         try:
-            kmeans_cluster_results = perform_kmeans_clustering(combined, selected_date, kmeans_clusters)
-            if not kmeans_cluster_results.empty:
-                fig_kmeans = create_kmeans_cluster_map(kmeans_cluster_results)
-                st.plotly_chart(fig_kmeans, use_container_width=True, key="kmeans_cluster_map")
+            spatial_cluster_results, centroids_df = perform_spatial_balanced_clustering(combined, selected_date,
+                                                                                        spatial_clusters)
+            if not spatial_cluster_results.empty:
+                fig_spatial = create_spatial_cluster_map(spatial_cluster_results, centroids_df)
+                st.plotly_chart(fig_spatial, use_container_width=True, key="spatial_cluster_map")
 
-                cluster_stats = kmeans_cluster_results.groupby('cluster').agg({
+                # Show detailed cluster statistics
+                cluster_stats = spatial_cluster_results.groupby('cluster').agg({
                     'station_name': 'count',
-                    'departures': 'mean',
-                    'arrivals': 'mean'
+                    'departures': 'sum',
+                    'arrivals': 'sum',
+                    'net_balance': 'sum'
                 }).round(2)
-                cluster_stats.columns = ['Station Count', 'Avg Departures', 'Avg Arrivals']
-                st.write("**Cluster Statistics:**")
+                cluster_stats.columns = ['Station Count', 'Total Departures', 'Total Arrivals', 'Net Balance']
+
+                # Add balance status
+                cluster_stats['Balance Status'] = cluster_stats['Net Balance'].apply(
+                    lambda x: 'Surplus' if x > 10 else 'Deficit' if x < -10 else 'Balanced'
+                )
+
+                st.write("**Spatial Cluster Statistics:**")
                 st.dataframe(cluster_stats, use_container_width=True)
+
+                # Show balance quality metrics
+                total_imbalance = cluster_stats['Net Balance'].abs().sum()
+                max_imbalance = cluster_stats['Net Balance'].abs().max()
+                balanced_clusters = sum(cluster_stats['Net Balance'].abs() <= 10)
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Imbalance", f"{total_imbalance:.0f}")
+                with col2:
+                    st.metric("Max Cluster Imbalance", f"{max_imbalance:.0f}")
+                with col3:
+                    st.metric("Balanced Clusters", f"{balanced_clusters}/{len(cluster_stats)}")
+
             else:
-                st.warning("No data available for K-means clustering on selected date.")
+                st.warning("No data available for spatial balanced clustering on selected date.")
         except Exception as e:
-            st.error(f"Error in K-means clustering: {str(e)}")
+            st.error(f"Error in spatial balanced clustering: {str(e)}")
 
     else:
-        # Timeline mode remains unchanged
-        pass
+        # Timeline mode
+        st.sidebar.header("Timeline Options")
+        radius_m = st.sidebar.slider("Clustering radius (m):", 100, 200, 100, 10)
+        show_dep = st.sidebar.checkbox("More departures", True)
+        show_arr = st.sidebar.checkbox("More arrivals", True)
+        show_bal = st.sidebar.checkbox("Balanced", True)
+        categories = [
+            name for name, chk in zip(
+                ["More departures", "More arrivals", "Balanced"],
+                [show_dep, show_arr, show_bal]
+            ) if chk
+        ]
 
+        st.sidebar.header("Select Date Range")
+        start_date = st.sidebar.date_input(
+            "Start date:", value=dates[0], min_value=dates[0], max_value=dates[-1]
+        )
+        end_date = st.sidebar.date_input(
+            "End date:", value=min(dates[-1], dates[0] + pd.Timedelta(days=6)),
+            min_value=dates[0], max_value=dates[-1]
+        )
+
+        if start_date > end_date:
+            st.error("Start date must be before end date.")
+        else:
+            st.subheader(f"Timeline Map — {start_date.strftime('%d/%m/%y')} to {end_date.strftime('%d/%m/%y')}")
+
+            try:
+                fig_timeline = create_timeline_map(combined, start_date, end_date, radius_m, categories)
+                st.plotly_chart(fig_timeline, use_container_width=True, key="timeline_map")
+            except Exception as e:
+                st.error(f"Error creating timeline map: {str(e)}")
+
+            # Weather data section
+            st.subheader("Weather Data")
+            try:
+                weather_data = load_weather(start_date, end_date)
+                if not weather_data.empty:
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        fig_temp = go.Figure()
+                        fig_temp.add_trace(go.Scatter(
+                            x=weather_data['date'],
+                            y=weather_data['temperature'],
+                            mode='lines+markers',
+                            name='Temperature',
+                            line=dict(color='red', width=2)
+                        ))
+                        fig_temp.update_layout(
+                            title="Daily Maximum Temperature",
+                            xaxis_title="Date",
+                            yaxis_title="Temperature (°C)",
+                            height=300
+                        )
+                        st.plotly_chart(fig_temp, use_container_width=True)
+
+                    with col2:
+                        fig_humidity = go.Figure()
+                        fig_humidity.add_trace(go.Scatter(
+                            x=weather_data['date'],
+                            y=weather_data['humidity'],
+                            mode='lines+markers',
+                            name='Humidity',
+                            line=dict(color='blue', width=2)
+                        ))
+                        fig_humidity.update_layout(
+                            title="Daily Maximum Humidity",
+                            xaxis_title="Date",
+                            yaxis_title="Humidity (%)",
+                            height=300
+                        )
+                        st.plotly_chart(fig_humidity, use_container_width=True)
+                else:
+                    st.warning("No weather data available for this date range.")
+            except Exception as e:
+                st.error(f"Error loading weather data: {str(e)}")
 
 
 if __name__ == "__main__":
