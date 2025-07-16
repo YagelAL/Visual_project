@@ -623,6 +623,11 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
     """Create ARIMA forecast for a selected station using only the past 2 weeks"""
     try:
         from statsmodels.tsa.arima.model import ARIMA
+        import plotly.graph_objects as go
+        import numpy as np
+        import pandas as pd
+
+        fig = go.Figure()  # ensure fig is always defined
 
         # Get station data
         station_data = combined[combined['station_name'] == selected_station].copy()
@@ -631,29 +636,30 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         station_data['net_balance'] = station_data['departures'] - station_data['arrivals']
 
         if len(station_data) < 7:  # Need minimum data
-            return go.Figure(), "Insufficient data for ARIMA forecast (need at least 7 days)"
+            return fig, "Insufficient data for ARIMA forecast (need at least 7 days)"
 
         # Use only the most recent 2 weeks (14 days) for better short-term prediction
         recent_data = station_data.tail(14)
 
         if len(recent_data) < 7:
-            return go.Figure(), "Insufficient recent data for ARIMA forecast"
+            return fig, "Insufficient recent data for ARIMA forecast"
+
+        # NEW: Record training date range
+        train_start = recent_data['date'].iloc[0].strftime('%Y-%m-%d')
+        train_end = recent_data['date'].iloc[-1].strftime('%Y-%m-%d')
 
         # Prepare time series from recent data
         ts = recent_data.set_index('date')['net_balance']
 
         # Fit ARIMA model with parameters optimized for short-term bike share data
-        # (1,0,1) often works well for daily bike share patterns
         try:
             model = ARIMA(ts, order=(1, 0, 1))
             fitted_model = model.fit()
         except:
-            # Fallback to simpler model if convergence issues
             try:
                 model = ARIMA(ts, order=(1, 1, 0))
                 fitted_model = model.fit()
             except:
-                # Final fallback
                 model = ARIMA(ts, order=(0, 1, 1))
                 fitted_model = model.fit()
 
@@ -718,8 +724,8 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         ))
 
         # Calculate date range for zooming (recent data + forecast + small buffer)
-        zoom_start = ts.index[0] - pd.Timedelta(days=1)  # Start slightly before recent data
-        zoom_end = forecast_index[-1] + pd.Timedelta(days=1)  # End slightly after forecast
+        zoom_start = ts.index[0] - pd.Timedelta(days=1)
+        zoom_end = forecast_index[-1] + pd.Timedelta(days=1)
 
         # Calculate y-axis range for better visualization
         recent_values = ts.values
@@ -727,14 +733,13 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         all_focus_values = np.concatenate([recent_values, forecast_values])
         y_min = np.min(all_focus_values)
         y_max = np.max(all_focus_values)
-        y_buffer = (y_max - y_min) * 0.1  # 10% buffer
+        y_buffer = (y_max - y_min) * 0.1
 
         fig.update_layout(
             title=f"ARIMA Forecast - {selected_station} (Using Past {len(recent_data)} Days)",
             xaxis_title="Date",
             yaxis_title="Net Balance",
             height=500,
-            # Zoom in on recent data and forecast by default
             xaxis=dict(
                 range=[zoom_start, zoom_end],
                 showgrid=True,
@@ -756,10 +761,13 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
             )
         )
 
-        return fig, f"ARIMA forecast successful for {forecast_days} days using past {len(recent_data)} days of data"
+        return fig, (
+            f"ARIMA forecast successful for {forecast_days} days "
+            f"(trained on {train_start} → {train_end}, {len(recent_data)} days)"
+        )
 
     except Exception as e:
-        return go.Figure(), f"ARIMA forecast failed: {str(e)}"
+        return fig, f"ARIMA forecast failed: {str(e)}"
 
 
 def create_prophet_forecast(combined, selected_station, forecast_days=7):
