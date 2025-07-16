@@ -12,15 +12,14 @@ from helper_functions import (
     load_processed_data,
     prepare_geodata_and_weights,
     prepare_daily_time_series_data,
-    load_weather,
     perform_time_series_clustering,
     create_map_visualization,
     create_time_series_cluster_map,
     create_timeline_map,
     create_daily_rides_bar_chart,
     create_spider_plot_for_month,
+    create_arrivals_departures_spider_plot,
     create_arima_forecast,
-    create_prophet_forecast,
     predict_peak_periods,
     create_weather_impact_analysis,
     detect_station_anomalies
@@ -89,36 +88,72 @@ def main():
 
         # Spider Plot for the entire month (moved to end)
         st.subheader(f"Monthly Station Analysis - {sel_date.strftime('%B %Y')}")
-        try:
-            fig_spider = create_spider_plot_for_month(combined, sel_date)
-            if fig_spider.data:
-                st.plotly_chart(fig_spider, use_container_width=True)
 
-                # Add spider plot explanation
-                with st.expander("📊 How to Read the Spider Plot"):
-                    st.markdown("""
-                    **Each station is represented by a spider-like visualization showing 8 key metrics:**
+        # Create tabs for different spider plots
+        spider_tab1, spider_tab2 = st.tabs(["📊 Multi-Metric Analysis", "🔄 Arrivals vs Departures"])
 
-                    **📊 Spider Arms (longer = higher value):**
-                    - **Avg Net Balance**: Overall demand pattern
-                    - **Volatility**: Day-to-day variation  
-                    - **Range**: Spread between max/min values
-                    - **Trend Slope**: Rate of change over time
-                    - **Peak Value**: Maximum daily demand
-                    - **Valley Value**: Maximum daily deficit
-                    - **Weekday-Weekend Diff**: Usage pattern difference
-                    - **Consistency**: Predictability measure (longer = more predictable)
+        with spider_tab1:
+            try:
+                fig_spider = create_spider_plot_for_month(combined, sel_date)
+                if fig_spider.data:
+                    # Add help icon with hover tooltip
+                    col1, col2 = st.columns([1, 20])
+                    with col1:
+                        st.markdown("ℹ️", help="""
+        **Each station is represented by a spider-like visualization showing 8 key metrics:**
 
-                    **🎨 Colors:**
-                    - **🔴 Red**: Stations with more departures (net positive)
-                    - **🔵 Blue**: Stations with more arrivals (net negative) 
-                    - **🟢 Green**: Balanced stations (near zero net)
-                    """)
-            else:
-                st.info("No data available for spider plot in this month.")
-        except Exception as e:
-            st.error(f"Error creating spider plot: {e}")
+        **📊 Spider Arms (longer = higher value):**
+        - **Avg Net Balance**: Overall demand pattern
+        - **Volatility**: Day-to-day variation  
+        - **Range**: Spread between max/min values
+        - **Trend Slope**: Rate of change over time
+        - **Peak Value**: Maximum daily demand
+        - **Valley Value**: Maximum daily deficit
+        - **Weekday-Weekend Diff**: Usage pattern difference
+        - **Consistency**: Predictability measure (longer = more predictable)
 
+        **🎨 Colors:**
+        - **🔴 Red**: Stations with more departures (net positive)
+        - **🟢 Green**: Stations with more arrivals (net negative) 
+        - **🔵 Blue**: Balanced stations (near zero net)
+                                """)
+
+                    st.plotly_chart(fig_spider, use_container_width=True)
+                else:
+                    st.info("No data available for spider plot in this month.")
+            except Exception as e:
+                st.error(f"Error creating spider plot: {e}")
+
+        with spider_tab2:
+            try:
+                fig_arrivals_departures = create_arrivals_departures_spider_plot(combined, sel_date)
+                if fig_arrivals_departures.data:
+                    # Add help icon with hover tooltip
+                    col1, col2 = st.columns([1, 20])
+                    with col1:
+                        st.markdown("ℹ️", help="""
+        **Arrivals vs Departures Spider Plot:**
+
+        **📊 Spider Arms:**
+        - **Thin Line**: Arrivals (longer = more arrivals)
+        - **Thick Line**: Departures (longer = more departures)
+
+        **🎨 Colors:**
+        - **🔴 Red**: More departures than arrivals
+        - **🟢 Green**: More arrivals than departures
+        - **🔵 Blue**: Balanced arrivals and departures
+
+        **📈 Interpretation:**
+        - Stations with longer thick lines are departure hubs
+        - Stations with longer thin lines are arrival destinations
+        - The angle between lines shows the balance ratio
+                                """)
+
+                    st.plotly_chart(fig_arrivals_departures, use_container_width=True)
+                else:
+                    st.info("No data available for arrivals/departures spider plot in this month.")
+            except Exception as e:
+                st.error(f"Error creating arrivals/departures spider plot: {e}")
     elif mode == "Timeline Map":
         # Timeline mode
         render_timeline_mode(combined, dates)
@@ -396,7 +431,6 @@ def render_model_suggestions():
             st.markdown("""
             **📈 Forecasting Models:**
             - **ARIMA/SARIMA**: Predict future net balance patterns
-            - **Prophet**: Seasonal forecasting with holidays
             - **LSTM Neural Networks**: Deep learning for sequence prediction
             - **Vector Autoregression (VAR)**: Multi-station forecasting
 
@@ -628,32 +662,7 @@ def render_models_map_mode(combined, dates):
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════════════════
-    # 2. PROPHET FORECAST
-    # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader("📈 Prophet Forecast")
-
-    # Forecast days control moved to main area
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        forecast_days_prophet = st.slider("Forecast Days:", 3, 14, 7, key="prophet_days")
-    with col2:
-        st.write(f"**Station:** {selected_station}")
-
-    with st.spinner("Running Prophet model..."):
-        try:
-            fig, message = create_prophet_forecast(combined, selected_station, forecast_days_prophet)
-            if fig.data:
-                st.plotly_chart(fig, use_container_width=True)
-                st.success(message)
-            else:
-                st.error(message)
-        except Exception as e:
-            st.error(f"Prophet forecast error: {e}")
-
-    st.markdown("---")
-
-    # ═══════════════════════════════════════════════════════════════════════════════
-    # 3. PEAK/OFF-PEAK PREDICTION
+    # 2. PEAK/OFF-PEAK PREDICTION
     # ═══════════════════════════════════════════════════════════════════════════════
     st.subheader(f"⏰ Peak/Off-Peak Analysis - {analysis_date.strftime('%d/%m/%y')}")
 
@@ -686,11 +695,12 @@ def render_models_map_mode(combined, dates):
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════════════════
-    # 4. ANOMALY DETECTION
+    # 3. ANOMALY DETECTION
     # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader(f"🚨 Anomaly Detection - {analysis_date.strftime('%d/%m/%y')}")
+    st.subheader(f"🚨 Monthly Anomaly Detection - {analysis_date.strftime('%B %Y')}")
 
     st.write(f"**Z-Score Threshold:** {z_threshold}")
+    st.info("ℹ️ This analysis uses the entire month's data to detect anomalous station behavior patterns.")
 
     with st.spinner("Detecting anomalies..."):
         try:
@@ -711,10 +721,8 @@ def render_models_map_mode(combined, dates):
         except Exception as e:
             st.error(f"Anomaly detection error: {e}")
 
-    st.markdown("---")
-
     # ═══════════════════════════════════════════════════════════════════════════════
-    # 5. WEATHER IMPACT ANALYSIS (MOVED TO END)
+    # 4. WEATHER IMPACT ANALYSIS
     # ═══════════════════════════════════════════════════════════════════════════════
     st.subheader("🌤️ Weather Impact Analysis")
 

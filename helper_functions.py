@@ -1,21 +1,15 @@
+import requests
+import os
+from libpysal.weights import KNN
+import geopandas as gpd
+from sklearn.cluster import DBSCAN, KMeans
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import requests
-import os
-from libpysal.weights import W
-import time
-from libpysal.weights import KNN
-import geopandas as gpd
-from spopt.region import RegionKMeansHeuristic
-from pyproj import Transformer
-from sklearn.cluster import DBSCAN, KMeans
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression
-from datetime import date
 import plotly.express as px
-
+from sklearn.preprocessing import StandardScaler
+from datetime import date
 # ── Month mappings ─────────────────────────────────────────────────────────────
 months = {
     "202409": "September 2024",
@@ -145,30 +139,6 @@ def prepare_daily_time_series_data(combined, selected_month):
     )
 
     return pivot, station_coords, day_info
-
-
-# ── WEATHER DATA ───────────────────────────────────────────────────────────────
-
-@st.cache_data
-def load_weather(start_date: date, end_date: date):
-    """Fetch weather data from Open-Meteo API"""
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": 40.7128,
-        "longitude": -74.0060,
-        "daily": ["temperature_2m_max", "relativehumidity_2m_max"],
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "timezone": "America/New_York"
-    }
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    d = r.json()["daily"]
-    return pd.DataFrame({
-        "date": pd.to_datetime(d["time"]).dt.date,
-        "temperature": d["temperature_2m_max"],
-        "humidity": d["relativehumidity_2m_max"]
-    })
 
 
 # ── CLUSTERING FUNCTIONS ───────────────────────────────────────────────────────
@@ -451,172 +421,6 @@ def create_timeline_map(combined, start_date, end_date, radius_m, categories):
     return fig
 
 
-def create_spider_plot_for_month(combined, selected_date):
-    """Create a spider plot showing station metrics for the entire month of the selected date"""
-    # Get the month period for the selected date
-    selected_month = pd.Period(selected_date, freq='M')
-
-    # Filter data for the selected month
-    df_month = combined.copy()
-    df_month['date'] = pd.to_datetime(df_month['date'])
-    month_data = df_month[df_month['date'].dt.to_period('M') == selected_month]
-
-    if month_data.empty:
-        return go.Figure()
-
-    # Calculate station-level metrics for the entire month
-    station_metrics = []
-
-    for station_name in month_data['station_name'].unique():
-        station_data = month_data[month_data['station_name'] == station_name]
-
-        if len(station_data) > 0:
-            daily_balances = (station_data['departures'] - station_data['arrivals']).values
-
-            # Calculate weekday vs weekend difference
-            weekday_vals = []
-            weekend_vals = []
-            for _, day_row in station_data.iterrows():
-                day_of_week = pd.to_datetime(day_row['date']).weekday()
-                daily_balance = day_row['departures'] - day_row['arrivals']
-                if day_of_week < 5:  # Monday=0, Sunday=6
-                    weekday_vals.append(daily_balance)
-                else:
-                    weekend_vals.append(daily_balance)
-
-            weekday_weekend_diff = 0
-            if weekday_vals and weekend_vals:
-                weekday_weekend_diff = abs(np.mean(weekday_vals) - np.mean(weekend_vals))
-
-            metrics = {
-                'station_name': station_name,
-                'lat': station_data['lat'].iloc[0],
-                'lng': station_data['lng'].iloc[0],
-                'avg_net_balance': np.mean(daily_balances),
-                'volatility': np.std(daily_balances),
-                'range_val': np.max(daily_balances) - np.min(daily_balances),
-                'trend_slope': abs(np.polyfit(range(len(daily_balances)), daily_balances, 1)[0]) if len(
-                    daily_balances) > 1 else 0,
-                'peak_value': np.max(daily_balances),
-                'valley_value': abs(np.min(daily_balances)),
-                'weekday_weekend_diff': weekday_weekend_diff,
-                'consistency': 100 - (np.std(daily_balances) / (abs(np.mean(daily_balances)) + 1) * 100)
-            }
-            station_metrics.append(metrics)
-
-    if not station_metrics:
-        return go.Figure()
-
-    # Create DataFrame and normalize metrics
-    stations_df = pd.DataFrame(station_metrics)
-
-    # Limit to reasonable number of stations for visualization
-    if len(stations_df) > 100:
-        stations_df = stations_df.sample(n=100, random_state=42)
-
-    # Normalize all metrics to 0-1 scale for spider plot
-    metric_cols = ['avg_net_balance', 'volatility', 'range_val', 'trend_slope',
-                   'peak_value', 'valley_value', 'weekday_weekend_diff', 'consistency']
-
-    for col in metric_cols:
-        min_val, max_val = stations_df[col].min(), stations_df[col].max()
-        if max_val > min_val:
-            stations_df[f'{col}_norm'] = (stations_df[col] - min_val) / (max_val - min_val)
-        else:
-            stations_df[f'{col}_norm'] = 0.5
-
-    # Create spider plot
-    fig_spider = go.Figure()
-
-    # Define spider plot parameters
-    n_metrics = len(metric_cols)
-    angles = np.linspace(0, 2 * np.pi, n_metrics, endpoint=False)
-
-    # Color stations by their average net balance (blue = negative, red = positive)
-    stations_df['color'] = stations_df['avg_net_balance'].apply(
-        lambda x: '#FF6B6B' if x > 0 else '#4DABF7' if x < 0 else '#69DB7C'
-    )
-
-    # Plot each station as a spider glyph
-    for _, station in stations_df.iterrows():
-        # Get normalized values for spider plot
-        values = [station[f'{col}_norm'] for col in metric_cols]
-
-        # Add spider lines
-        for i in range(n_metrics):
-            angle = angles[i]
-            value = values[i]
-            scaled_value = 0.05 + value * 0.15  # Scale for visibility
-            x_end = station['lng'] + scaled_value * np.cos(angle) * 0.01
-            y_end = station['lat'] + scaled_value * np.sin(angle) * 0.01
-
-            fig_spider.add_trace(go.Scattermapbox(
-                lat=[station['lat'], y_end],
-                lon=[station['lng'], x_end],
-                mode='lines',
-                line=dict(color=station['color'], width=1),
-                hoverinfo='skip',
-                showlegend=False
-            ))
-
-        # Add center point
-        fig_spider.add_trace(go.Scattermapbox(
-            lat=[station['lat']],
-            lon=[station['lng']],
-            mode='markers',
-            marker=dict(size=3, color=station['color']),
-            text=station['station_name'],
-            hovertemplate=f"<b>%{{text}}</b><br>Avg Balance: {station['avg_net_balance']:.1f}<extra></extra>",
-            showlegend=False
-        ))
-
-    # Add legend entries
-    fig_spider.add_trace(go.Scattermapbox(
-        lat=[None], lon=[None],
-        mode='markers',
-        marker=dict(size=10, color='#FF6B6B'),
-        name='More Departures',
-        showlegend=True
-    ))
-    fig_spider.add_trace(go.Scattermapbox(
-        lat=[None], lon=[None],
-        mode='markers',
-        marker=dict(size=10, color='#4DABF7'),
-        name='More Arrivals',
-        showlegend=True
-    ))
-    fig_spider.add_trace(go.Scattermapbox(
-        lat=[None], lon=[None],
-        mode='markers',
-        marker=dict(size=10, color='#69DB7C'),
-        name='Balanced',
-        showlegend=True
-    ))
-
-    fig_spider.update_layout(
-        mapbox=dict(
-            style="open-street-map",
-            center=dict(
-                lat=stations_df['lat'].mean(),
-                lon=stations_df['lng'].mean()
-            ),
-            zoom=10
-        ),
-        height=600,
-        margin=dict(l=0, r=0, t=0, b=0),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0,
-            font=dict(size=14)
-        )
-    )
-
-    return fig
-
-
 # ── ADVANCED MODELS ────────────────────────────────────────────────────────────
 
 def create_arima_forecast(combined, selected_station, forecast_days=7):
@@ -770,96 +574,6 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         return fig, f"ARIMA forecast failed: {str(e)}"
 
 
-def create_prophet_forecast(combined, selected_station, forecast_days=7):
-    """Create Prophet forecast with seasonality"""
-    try:
-        # Try importing Prophet with proper error handling
-        import warnings
-        warnings.filterwarnings('ignore')
-
-        try:
-            from prophet import Prophet
-        except ImportError:
-            try:
-                from fbprophet import Prophet  # Alternative import name
-            except ImportError:
-                return go.Figure(), "Prophet library not installed. Please install with: pip install prophet"
-
-        # Get station data
-        station_data = combined[combined['station_name'] == selected_station].copy()
-        station_data['date'] = pd.to_datetime(station_data['date'])
-        station_data = station_data.sort_values('date')
-        station_data['net_balance'] = station_data['departures'] - station_data['arrivals']
-
-        if len(station_data) < 14:
-            return go.Figure(), "Insufficient data for Prophet forecast"
-
-        # Prepare Prophet format
-        prophet_df = station_data[['date', 'net_balance']].rename(columns={'date': 'ds', 'net_balance': 'y'})
-
-        # Fit Prophet model
-        model = Prophet(daily_seasonality=True, weekly_seasonality=True)
-        model.fit(prophet_df)
-
-        # Create future dataframe
-        future = model.make_future_dataframe(periods=forecast_days)
-        forecast = model.predict(future)
-
-        # Create plot
-        fig = go.Figure()
-
-        # Historical data
-        fig.add_trace(go.Scatter(
-            x=prophet_df['ds'],
-            y=prophet_df['y'],
-            mode='lines+markers',
-            name='Historical',
-            line=dict(color='steelblue', width=2)
-        ))
-
-        # Forecast
-        forecast_future = forecast.tail(forecast_days)
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat'],
-            mode='lines+markers',
-            name='Forecast',
-            line=dict(color='red', width=2, dash='dash')
-        ))
-
-        # Uncertainty intervals
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat_upper'],
-            mode='lines',
-            line=dict(color='rgba(255,0,0,0.3)', width=0),
-            showlegend=False
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat_lower'],
-            mode='lines',
-            fill='tonexty',
-            fillcolor='rgba(255,0,0,0.2)',
-            line=dict(color='rgba(255,0,0,0.3)', width=0),
-            name='Uncertainty',
-            showlegend=True
-        ))
-
-        fig.update_layout(
-            title=f"Prophet Forecast - {selected_station}",
-            xaxis_title="Date",
-            yaxis_title="Net Balance",
-            height=400
-        )
-
-        return fig, f"Prophet forecast successful for {forecast_days} days"
-
-    except Exception as e:
-        return go.Figure(), f"Prophet forecast failed: {str(e)}"
-
-
 def predict_peak_periods(combined, selected_date):
     """Predict peak/off-peak periods for all stations"""
     df_day = combined[combined['date'] == selected_date].copy()
@@ -1006,28 +720,50 @@ def create_weather_impact_analysis(combined, weather_data):
 
 
 def detect_station_anomalies(combined, selected_date, z_threshold=2.5):
-    """Detect anomalous station behavior using Z-score"""
-    df_day = combined[combined['date'] == selected_date].copy()
-    df_day['net_balance'] = df_day['departures'] - df_day['arrivals']
-    df_day['total_activity'] = df_day['departures'] + df_day['arrivals']
+    """Detect anomalous station behavior using Z-score for entire month"""
+    # Get the month period for the selected date
+    selected_month = pd.Period(selected_date, freq='M')
 
-    if df_day.empty:
+    # Filter data for the selected month
+    df_month = combined.copy()
+    df_month['date'] = pd.to_datetime(df_month['date'])
+    month_data = df_month[df_month['date'].dt.to_period('M') == selected_month]
+
+    if month_data.empty:
         return go.Figure(), "No data for anomaly detection"
 
-    # Calculate Z-scores
-    df_day['net_balance_zscore'] = np.abs(
-        (df_day['net_balance'] - df_day['net_balance'].mean()) / df_day['net_balance'].std())
-    df_day['activity_zscore'] = np.abs(
-        (df_day['total_activity'] - df_day['total_activity'].mean()) / df_day['total_activity'].std())
+    # Calculate monthly aggregated metrics per station
+    station_monthly = (
+        month_data
+        .groupby('station_name')
+        .agg({
+            'departures': 'sum',
+            'arrivals': 'sum',
+            'lat': 'first',
+            'lng': 'first'
+        })
+        .reset_index()
+    )
+
+    station_monthly['net_balance'] = station_monthly['departures'] - station_monthly['arrivals']
+    station_monthly['total_activity'] = station_monthly['departures'] + station_monthly['arrivals']
+
+    # Calculate Z-scores for the entire month
+    station_monthly['net_balance_zscore'] = np.abs(
+        (station_monthly['net_balance'] - station_monthly['net_balance'].mean()) / station_monthly['net_balance'].std())
+    station_monthly['activity_zscore'] = np.abs(
+        (station_monthly['total_activity'] - station_monthly['total_activity'].mean()) / station_monthly[
+            'total_activity'].std())
 
     # Identify anomalies
-    df_day['is_anomaly'] = (df_day['net_balance_zscore'] > z_threshold) | (df_day['activity_zscore'] > z_threshold)
+    station_monthly['is_anomaly'] = (station_monthly['net_balance_zscore'] > z_threshold) | (
+                station_monthly['activity_zscore'] > z_threshold)
 
     # Create map
     fig = go.Figure()
 
     # Normal stations
-    normal_stations = df_day[~df_day['is_anomaly']]
+    normal_stations = station_monthly[~station_monthly['is_anomaly']]
     if not normal_stations.empty:
         fig.add_trace(go.Scattermapbox(
             lat=normal_stations['lat'],
@@ -1041,7 +777,7 @@ def detect_station_anomalies(combined, selected_date, z_threshold=2.5):
         ))
 
     # Anomalous stations
-    anomaly_stations = df_day[df_day['is_anomaly']]
+    anomaly_stations = station_monthly[station_monthly['is_anomaly']]
     if not anomaly_stations.empty:
         fig.add_trace(go.Scattermapbox(
             lat=anomaly_stations['lat'],
@@ -1072,9 +808,9 @@ def detect_station_anomalies(combined, selected_date, z_threshold=2.5):
     )
 
     anomaly_count = len(anomaly_stations)
-    total_count = len(df_day)
+    total_count = len(station_monthly)
 
-    return fig, f"Found {anomaly_count} anomalies out of {total_count} stations ({anomaly_count / total_count * 100:.1f}%)"
+    return fig, f"Found {anomaly_count} anomalies out of {total_count} stations ({anomaly_count / total_count * 100:.1f}%) for {selected_month.strftime('%B %Y')}"
 
 
 def create_daily_rides_bar_chart(combined, start_date, end_date):
@@ -1131,6 +867,817 @@ def create_daily_rides_bar_chart(combined, start_date, end_date):
         paper_bgcolor='#1E1E1E',
         font=dict(color='white'),
         title_font=dict(color='white')
+    )
+
+    return fig
+
+
+def create_parallel_coordinates_plot(combined, selected_date):
+    """
+    Create a parallel coordinates plot showing multiple station metrics
+    for comprehensive multi-dimensional analysis
+    """
+    # Get the month period for the selected date
+    selected_month = pd.Period(selected_date, freq='M')
+
+    # Filter data for the selected month
+    df_month = combined.copy()
+    df_month['date'] = pd.to_datetime(df_month['date'])
+    month_data = df_month[df_month['date'].dt.to_period('M') == selected_month]
+
+    if month_data.empty:
+        return go.Figure(), "No data available for the selected month"
+
+    # Calculate comprehensive station metrics
+    station_metrics = []
+
+    for station_name in month_data['station_name'].unique():
+        station_data = month_data[month_data['station_name'] == station_name]
+
+        if len(station_data) > 0:
+            # Basic metrics
+            daily_departures = station_data['departures'].values
+            daily_arrivals = station_data['arrivals'].values
+            daily_balances = daily_departures - daily_arrivals
+            total_activity = daily_departures + daily_arrivals
+
+            # Temporal analysis
+            station_data_with_dow = station_data.copy()
+            station_data_with_dow['day_of_week'] = pd.to_datetime(station_data_with_dow['date']).dt.dayofweek
+            station_data_with_dow['is_weekend'] = station_data_with_dow['day_of_week'].isin([5, 6])
+
+            weekday_data = station_data_with_dow[~station_data_with_dow['is_weekend']]
+            weekend_data = station_data_with_dow[station_data_with_dow['is_weekend']]
+
+            # Calculate metrics
+            avg_departures = np.mean(daily_departures)
+            avg_arrivals = np.mean(daily_arrivals)
+            avg_net_balance = np.mean(daily_balances)
+            avg_total_activity = np.mean(total_activity)
+
+            # Variability metrics
+            balance_volatility = np.std(daily_balances)
+            activity_volatility = np.std(total_activity)
+
+            # Range metrics
+            balance_range = np.max(daily_balances) - np.min(daily_balances)
+            activity_range = np.max(total_activity) - np.min(total_activity)
+
+            # Trend analysis
+            if len(daily_balances) > 1:
+                balance_trend = np.polyfit(range(len(daily_balances)), daily_balances, 1)[0]
+                activity_trend = np.polyfit(range(len(total_activity)), total_activity, 1)[0]
+            else:
+                balance_trend = 0
+                activity_trend = 0
+
+            # Peak analysis
+            max_departures = np.max(daily_departures)
+            max_arrivals = np.max(daily_arrivals)
+            max_deficit = abs(np.min(daily_balances)) if np.min(daily_balances) < 0 else 0
+            max_surplus = np.max(daily_balances) if np.max(daily_balances) > 0 else 0
+
+            # Weekday vs Weekend difference
+            weekday_weekend_diff = 0
+            if not weekday_data.empty and not weekend_data.empty:
+                weekday_avg = np.mean(weekday_data['departures'] - weekday_data['arrivals'])
+                weekend_avg = np.mean(weekend_data['departures'] - weekend_data['arrivals'])
+                weekday_weekend_diff = abs(weekday_avg - weekend_avg)
+
+            # Consistency measure (inverse of coefficient of variation)
+            consistency = 100 - (balance_volatility / (abs(avg_net_balance) + 1) * 100)
+
+            # Activity intensity (normalized by max possible activity)
+            activity_intensity = avg_total_activity / (np.max(total_activity) + 1) * 100
+
+            # Imbalance ratio (how skewed towards departures or arrivals)
+            imbalance_ratio = abs(avg_departures - avg_arrivals) / (avg_departures + avg_arrivals + 1) * 100
+
+            metrics = {
+                'Station': station_name,
+                'Lat': station_data['lat'].iloc[0],
+                'Lng': station_data['lng'].iloc[0],
+                'Avg_Departures': avg_departures,
+                'Avg_Arrivals': avg_arrivals,
+                'Avg_Net_Balance': avg_net_balance,
+                'Avg_Total_Activity': avg_total_activity,
+                'Balance_Volatility': balance_volatility,
+                'Activity_Volatility': activity_volatility,
+                'Balance_Range': balance_range,
+                'Activity_Range': activity_range,
+                'Balance_Trend': balance_trend,
+                'Activity_Trend': activity_trend,
+                'Max_Departures': max_departures,
+                'Max_Arrivals': max_arrivals,
+                'Max_Deficit': max_deficit,
+                'Max_Surplus': max_surplus,
+                'Weekday_Weekend_Diff': weekday_weekend_diff,
+                'Consistency': consistency,
+                'Activity_Intensity': activity_intensity,
+                'Imbalance_Ratio': imbalance_ratio
+            }
+
+            station_metrics.append(metrics)
+
+    if not station_metrics:
+        return go.Figure(), "No station metrics calculated"
+
+    # Create DataFrame
+    df_metrics = pd.DataFrame(station_metrics)
+
+    # Limit to reasonable number of stations for visualization
+    if len(df_metrics) > 150:
+        df_metrics = df_metrics.sample(n=150, random_state=42)
+        st.info(f"📊 Sampled {len(df_metrics)} stations for parallel coordinates visualization")
+
+    # Select key metrics for parallel coordinates
+    parallel_metrics = [
+        'Avg_Net_Balance',
+        'Avg_Total_Activity',
+        'Balance_Volatility',
+        'Activity_Intensity',
+        'Imbalance_Ratio',
+        'Consistency',
+        'Balance_Range',
+        'Weekday_Weekend_Diff'
+    ]
+
+    # Create color coding based on station type
+    df_metrics['Station_Type'] = df_metrics['Avg_Net_Balance'].apply(
+        lambda x: 'Departure Hub' if x > 5 else 'Arrival Hub' if x < -5 else 'Balanced'
+    )
+
+    # Color mapping
+    color_map = {
+        'Departure Hub': '#FF6B6B',
+        'Arrival Hub': '#4ECDC4',
+        'Balanced': '#45B7D1'
+    }
+
+    df_metrics['Color'] = df_metrics['Station_Type'].map(color_map)
+
+    # Create parallel coordinates plot
+    fig = go.Figure(data=
+    go.Parcoords(
+        line=dict(
+            color=df_metrics['Avg_Net_Balance'],
+            colorscale='RdYlBu_r',
+            showscale=True,
+            colorbar=dict(
+                title="Average Net Balance",
+                titleside="top",
+                tickmode="linear",
+                tick0=df_metrics['Avg_Net_Balance'].min(),
+                dtick=(df_metrics['Avg_Net_Balance'].max() - df_metrics['Avg_Net_Balance'].min()) / 6
+            )
+        ),
+        dimensions=[
+            dict(
+                range=[df_metrics[metric].min(), df_metrics[metric].max()],
+                label=metric.replace('_', ' '),
+                values=df_metrics[metric]
+            ) for metric in parallel_metrics
+        ],
+        labelangle=45,
+        labelside="bottom"
+    )
+    )
+
+    fig.update_layout(
+        title=f"Station Performance Parallel Coordinates - {selected_month.strftime('%B %Y')}",
+        height=700,
+        margin=dict(l=80, r=80, t=80, b=120),
+        font=dict(size=12),
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+
+    return fig, f"Parallel coordinates plot created for {len(df_metrics)} stations"
+
+
+def create_interactive_parallel_coordinates(combined, selected_date):
+    """
+    Create an interactive parallel coordinates plot with Plotly Express
+    """
+    # Get the month period for the selected date
+    selected_month = pd.Period(selected_date, freq='M')
+
+    # Filter data for the selected month
+    df_month = combined.copy()
+    df_month['date'] = pd.to_datetime(df_month['date'])
+    month_data = df_month[df_month['date'].dt.to_period('M') == selected_month]
+
+    if month_data.empty:
+        return go.Figure(), "No data available for the selected month"
+
+    # Calculate station metrics (same as above but simplified)
+    station_metrics = []
+
+    for station_name in month_data['station_name'].unique():
+        station_data = month_data[month_data['station_name'] == station_name]
+
+        if len(station_data) > 2:  # Need minimum data
+            daily_departures = station_data['departures'].values
+            daily_arrivals = station_data['arrivals'].values
+            daily_balances = daily_departures - daily_arrivals
+            total_activity = daily_departures + daily_arrivals
+
+            metrics = {
+                'Station': station_name,
+                'Net_Balance': np.mean(daily_balances),
+                'Total_Activity': np.mean(total_activity),
+                'Volatility': np.std(daily_balances),
+                'Range': np.max(daily_balances) - np.min(daily_balances),
+                'Peak_Departures': np.max(daily_departures),
+                'Peak_Arrivals': np.max(daily_arrivals),
+                'Station_Type': 'Departure Hub' if np.mean(daily_balances) > 5 else 'Arrival Hub' if np.mean(
+                    daily_balances) < -5 else 'Balanced'
+            }
+
+            station_metrics.append(metrics)
+
+    if not station_metrics:
+        return go.Figure(), "No station metrics calculated"
+
+    df_metrics = pd.DataFrame(station_metrics)
+
+    # Limit stations for performance
+    if len(df_metrics) > 100:
+        df_metrics = df_metrics.sample(n=100, random_state=42)
+
+    # Create parallel coordinates plot with Plotly Express
+    fig = px.parallel_coordinates(
+        df_metrics,
+        dimensions=['Net_Balance', 'Total_Activity', 'Volatility', 'Range', 'Peak_Departures', 'Peak_Arrivals'],
+        color='Net_Balance',
+        color_continuous_scale='RdYlBu_r',
+        labels={
+            'Net_Balance': 'Net Balance',
+            'Total_Activity': 'Total Activity',
+            'Volatility': 'Volatility',
+            'Range': 'Range',
+            'Peak_Departures': 'Peak Departures',
+            'Peak_Arrivals': 'Peak Arrivals'
+        },
+        title=f"Station Metrics Parallel Coordinates - {selected_month.strftime('%B %Y')}"
+    )
+
+    fig.update_layout(
+        height=600,
+        margin=dict(l=50, r=50, t=80, b=50),
+        font=dict(size=12)
+    )
+
+    return fig, f"Interactive parallel coordinates created for {len(df_metrics)} stations"
+
+
+def create_parallel_coordinates_with_clustering(combined, selected_date, n_clusters=4):
+    """
+    Create parallel coordinates plot with K-means clustering overlay
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+
+    # Get the month period for the selected date
+    selected_month = pd.Period(selected_date, freq='M')
+
+    # Filter data for the selected month
+    df_month = combined.copy()
+    df_month['date'] = pd.to_datetime(df_month['date'])
+    month_data = df_month[df_month['date'].dt.to_period('M') == selected_month]
+
+    if month_data.empty:
+        return go.Figure(), "No data available for the selected month"
+
+    # Calculate station metrics
+    station_metrics = []
+
+    for station_name in month_data['station_name'].unique():
+        station_data = month_data[month_data['station_name'] == station_name]
+
+        if len(station_data) > 2:
+            daily_departures = station_data['departures'].values
+            daily_arrivals = station_data['arrivals'].values
+            daily_balances = daily_departures - daily_arrivals
+            total_activity = daily_departures + daily_arrivals
+
+            metrics = {
+                'Station': station_name,
+                'Net_Balance': np.mean(daily_balances),
+                'Total_Activity': np.mean(total_activity),
+                'Volatility': np.std(daily_balances),
+                'Range': np.max(daily_balances) - np.min(daily_balances),
+                'Peak_Departures': np.max(daily_departures),
+                'Peak_Arrivals': np.max(daily_arrivals),
+                'Consistency': 100 - (np.std(daily_balances) / (abs(np.mean(daily_balances)) + 1) * 100)
+            }
+
+            station_metrics.append(metrics)
+
+    if not station_metrics:
+        return go.Figure(), "No station metrics calculated"
+
+    df_metrics = pd.DataFrame(station_metrics)
+
+    # Limit stations for performance
+    if len(df_metrics) > 100:
+        df_metrics = df_metrics.sample(n=100, random_state=42)
+
+    # Prepare data for clustering
+    feature_columns = ['Net_Balance', 'Total_Activity', 'Volatility', 'Range', 'Peak_Departures', 'Peak_Arrivals',
+                       'Consistency']
+    features = df_metrics[feature_columns].values
+
+    # Standardize features
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+
+    # Perform K-means clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    cluster_labels = kmeans.fit_predict(features_scaled)
+    df_metrics['Cluster'] = cluster_labels + 1  # Start from 1 instead of 0
+
+    # Create parallel coordinates plot with cluster coloring
+    fig = go.Figure(data=
+    go.Parcoords(
+        line=dict(
+            color=df_metrics['Cluster'],
+            colorscale='Set3',
+            showscale=True,
+            colorbar=dict(
+                title="Cluster",
+                titleside="top",
+                tickmode="array",
+                tickvals=list(range(1, n_clusters + 1)),
+                ticktext=[f"Cluster {i}" for i in range(1, n_clusters + 1)]
+            )
+        ),
+        dimensions=[
+            dict(
+                range=[df_metrics[col].min(), df_metrics[col].max()],
+                label=col.replace('_', ' '),
+                values=df_metrics[col]
+            ) for col in feature_columns
+        ],
+        labelangle=45,
+        labelside="bottom"
+    )
+    )
+
+    fig.update_layout(
+        title=f"Station Clustering Parallel Coordinates - {selected_month.strftime('%B %Y')} ({n_clusters} Clusters)",
+        height=700,
+        margin=dict(l=80, r=80, t=80, b=120),
+        font=dict(size=12)
+    )
+
+    # Calculate cluster statistics
+    cluster_stats = df_metrics.groupby('Cluster').agg({
+        'Net_Balance': ['mean', 'std'],
+        'Total_Activity': ['mean', 'std'],
+        'Volatility': ['mean', 'std']
+    }).round(2)
+
+    return fig, f"Clustered parallel coordinates created for {len(df_metrics)} stations in {n_clusters} clusters", cluster_stats
+
+# Function to add to helper_functions.py
+
+
+def render_parallel_coordinates_section(combined, selected_date):
+    """
+    Render the parallel coordinates analysis section
+    """
+    st.subheader("📊 Parallel Coordinates Analysis")
+
+    # Create tabs for different parallel coordinates views
+    tab1, tab2, tab3 = st.tabs(["📈 Basic Metrics", "🎯 Interactive View", "🔍 Clustered Analysis"])
+
+    with tab1:
+        st.markdown("**Multi-dimensional station performance visualization**")
+
+        with st.spinner("Creating parallel coordinates plot..."):
+            try:
+                fig, message = create_parallel_coordinates_plot(combined, selected_date)
+                if fig.data:
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.success(message)
+
+                    # Add explanation
+                    with st.expander("📖 How to Read This Plot"):
+                        st.markdown("""
+                        **Parallel Coordinates Plot Guide:**
+
+                        - **Each line** represents one bike station
+                        - **Each vertical axis** represents a different metric
+                        - **Line color** indicates the average net balance (red = more departures, blue = more arrivals)
+                        - **Parallel lines** indicate stations with similar patterns
+                        - **Intersecting lines** show stations that rank differently across metrics
+
+                        **Key Insights:**
+                        - Look for clusters of similar lines
+                        - Identify outlier stations that deviate from patterns
+                        - Compare how stations perform across different dimensions
+                        """)
+                else:
+                    st.error(message)
+            except Exception as e:
+                st.error(f"Error creating parallel coordinates plot: {e}")
+
+    with tab2:
+        st.markdown("**Interactive parallel coordinates with simplified metrics**")
+
+        with st.spinner("Creating interactive plot..."):
+            try:
+                fig, message = create_interactive_parallel_coordinates(combined, selected_date)
+                if fig.data:
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.success(message)
+                else:
+                    st.error(message)
+            except Exception as e:
+                st.error(f"Error creating interactive plot: {e}")
+
+    with tab3:
+        st.markdown("**Parallel coordinates with K-means clustering**")
+
+        n_clusters = st.slider("Number of Clusters:", 2, 6, 4, key="parallel_clusters")
+
+        with st.spinner("Creating clustered analysis..."):
+            try:
+                fig, message, cluster_stats = create_parallel_coordinates_with_clustering(combined, selected_date,
+                                                                                          n_clusters)
+                if fig.data:
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.success(message)
+
+                    # Show cluster statistics
+                    st.subheader("Cluster Statistics")
+                    st.dataframe(cluster_stats)
+
+                else:
+                    st.error(message)
+            except Exception as e:
+                st.error(f"Error creating clustered analysis: {e}")
+
+
+def create_spider_plot_for_month(combined, selected_date):
+    """Create a spider scatter plot showing station metrics"""
+    # Get the month period for the selected date
+    selected_month = pd.Period(selected_date, freq='M')
+
+    # Filter data for the selected month
+    df_month = combined.copy()
+    df_month['date'] = pd.to_datetime(df_month['date'])
+    month_data = df_month[df_month['date'].dt.to_period('M') == selected_month]
+
+    if month_data.empty:
+        return go.Figure()
+
+    # Calculate monthly totals per station
+    station_monthly = (
+        month_data
+        .groupby('station_name')
+        .agg({
+            'departures': 'sum',
+            'arrivals': 'sum',
+            'lat': 'first',
+            'lng': 'first'
+        })
+        .reset_index()
+    )
+
+    # Take top 200 stations by total activity
+    station_monthly['total_activity'] = station_monthly['departures'] + station_monthly['arrivals']
+    top_stations = station_monthly.nlargest(200, 'total_activity')
+
+    # Min-max scale the data for better spider arm visibility
+    top_stations['total_activity_scaled'] = (top_stations['total_activity'] - top_stations['total_activity'].min()) / (
+                top_stations['total_activity'].max() - top_stations['total_activity'].min())
+    top_stations['departure_ratio_scaled'] = (top_stations['departure_ratio'] - top_stations[
+        'departure_ratio'].min()) / (top_stations['departure_ratio'].max() - top_stations['departure_ratio'].min())
+
+    # Calculate key metrics
+    top_stations['net_balance'] = top_stations['departures'] - top_stations['arrivals']
+    top_stations['arrival_ratio'] = top_stations['arrivals'] / top_stations['total_activity']
+    top_stations['balance_magnitude'] = abs(top_stations['net_balance'])
+
+    # Min-max scale all metrics for spider arms (0-1 scale)
+    metrics = ['total_activity', 'departure_ratio', 'arrival_ratio', 'balance_magnitude']
+    for metric in metrics:
+        min_val = top_stations[metric].min()
+        max_val = top_stations[metric].max()
+        if max_val > min_val:
+            top_stations[f'{metric}_norm'] = (top_stations[metric] - min_val) / (max_val - min_val)
+        else:
+            top_stations[f'{metric}_norm'] = 0.5
+
+    # Create scatter plot
+    fig = go.Figure()
+
+    # Define spider arm angles (4 directions: up, right, down, left)
+    angles = [np.pi / 2, 0, -np.pi / 2, np.pi]  # 90, 0, -90, 180 degrees
+    metric_names = ['Total Activity', 'Departure Ratio', 'Arrival Ratio', 'Balance Magnitude']
+
+    # Color stations by net balance
+    top_stations['color'] = top_stations['net_balance'].apply(
+        lambda x: '#FF6B6B' if x > 0 else '#69DB7C' if x < 0 else '#4DABF7'
+    )
+
+    # Create spider arms for each station
+    for _, station in top_stations.iterrows():
+        station_x = station['total_activity_scaled']
+        station_y = station['departure_ratio_scaled']
+
+        # Get normalized values for spider arms
+        values = [station[f'{metric}_norm'] for metric in metrics]
+
+        # Create spider arms
+        for i, (angle, value, metric_name) in enumerate(zip(angles, values, metric_names)):
+            # Calculate arm length (scale by value) - make them more visible
+            arm_length = 100 + value * 300  # Longer base length + more scaling
+
+            # Calculate end point
+            end_x = station_x + arm_length * np.cos(angle)
+            end_y = station_y + arm_length * np.sin(angle)
+
+            # Add spider arm line
+            fig.add_trace(go.Scatter(
+                x=[station_x, end_x],
+                y=[station_y, end_y],
+                mode='lines',
+                line=dict(color=station['color'], width=1.5),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+
+            # Add small marker at end of arm
+            fig.add_trace(go.Scatter(
+                x=[end_x],
+                y=[end_y],
+                mode='markers',
+                marker=dict(size=3, color=station['color'], symbol='circle'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+
+    # Add center points (stations)
+    for color_val, color_name in [('#FF6B6B', 'More Departures'), ('#69DB7C', 'More Arrivals'),
+                                  ('#4DABF7', 'Balanced')]:
+        color_stations = top_stations[top_stations['color'] == color_val]
+
+        if len(color_stations) > 0:
+            fig.add_trace(go.Scatter(
+                x=color_stations['total_activity_scaled'],
+                y=color_stations['departure_ratio_scaled'],
+                mode='markers',
+                marker=dict(size=6, color=color_val, symbol='circle'),
+                text=color_stations['station_name'],
+                hovertemplate='<b>%{text}</b><br>' +
+                              'Total Activity: %{customdata[0]:.0f}<br>' +
+                              'Departure Ratio: %{customdata[1]:.2f}<br>' +
+                              'Net Balance: %{customdata[2]:.0f}<br>' +
+                              'Balance Magnitude: %{customdata[3]:.0f}<extra></extra>',
+                customdata=color_stations[
+                    ['total_activity', 'departure_ratio', 'net_balance', 'balance_magnitude']].values,
+                name=color_name,
+                showlegend=True
+            ))
+
+    fig.update_layout(
+        title=f"Spider Scatter Plot - Station Metrics ({selected_month.strftime('%B %Y')})",
+        xaxis_title="Total Activity (Min-Max Scaled: 0-1)",
+        yaxis_title="Departure Ratio (Min-Max Scaled: 0-1)",
+        height=600,
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02,
+            bgcolor="rgba(40,40,40,0.9)",  # Dark background
+            bordercolor="white",
+            borderwidth=1,
+            font=dict(color="white", size=12)
+        ),
+        annotations=[
+            dict(
+                text="<b>SPIDER SCATTER PLOT EXPLANATION:</b><br><br>" +
+                     "<b>X-axis:</b> Total Activity (Min-Max Scaled)<br>" +
+                     "<b>Y-axis:</b> Departure Ratio (Min-Max Scaled)<br><br>" +
+                     "<b>Spider Arms (from each station point):</b><br>" +
+                     "↑ <b>Up:</b> Total Activity (min-max scaled)<br>" +
+                     "→ <b>Right:</b> Departure Ratio (min-max scaled)<br>" +
+                     "↓ <b>Down:</b> Arrival Ratio (min-max scaled)<br>" +
+                     "← <b>Left:</b> Balance Magnitude (min-max scaled)<br><br>" +
+                     "<b>Station Colors:</b><br>" +
+                     "🔴 Red = More Departures than Arrivals<br>" +
+                     "🟢 Green = More Arrivals than Departures<br>" +
+                     "🔵 Blue = Balanced (Equal Arrivals/Departures)<br><br>" +
+                     "<b>Scaling:</b> All metrics normalized to 0-1 range<br>" +
+                     "<b>Showing:</b> Top 200 stations by total activity",
+                showarrow=False,
+                xref="paper", yref="paper",
+                x=0.02, y=0.98,
+                xanchor="left", yanchor="top",
+                bgcolor="rgba(40,40,40,0.9)",  # Dark background
+                bordercolor="white",
+                borderwidth=1,
+                font=dict(size=9, color="white")
+            )
+        ]
+    )
+
+    return fig
+
+
+def create_arrivals_departures_spider_plot(combined, selected_date):
+    """Create spider scatter plot comparing arrivals vs departures"""
+    # Get the month period for the selected date
+    selected_month = pd.Period(selected_date, freq='M')
+
+    # Filter data for the selected month
+    df_month = combined.copy()
+    df_month['date'] = pd.to_datetime(df_month['date'])
+    month_data = df_month[df_month['date'].dt.to_period('M') == selected_month]
+
+    if month_data.empty:
+        return go.Figure()
+
+    # Calculate monthly totals per station
+    station_monthly = (
+        month_data
+        .groupby('station_name')
+        .agg({
+            'departures': 'sum',
+            'arrivals': 'sum',
+            'lat': 'first',
+            'lng': 'first'
+        })
+        .reset_index()
+    )
+
+    # Take top 200 stations by total activity
+    station_monthly['total_activity'] = station_monthly['departures'] + station_monthly['arrivals']
+    top_stations = station_monthly.nlargest(200, 'total_activity')
+
+    # Calculate metrics
+    top_stations['net_balance'] = top_stations['departures'] - top_stations['arrivals']
+
+    # Min-max scale arrivals and departures for spider arms
+    max_arrivals = top_stations['arrivals'].max()
+    max_departures = top_stations['departures'].max()
+    min_arrivals = top_stations['arrivals'].min()
+    min_departures = top_stations['departures'].min()
+
+    if max_arrivals > min_arrivals:
+        top_stations['arrivals_norm'] = (top_stations['arrivals'] - min_arrivals) / (max_arrivals - min_arrivals)
+    else:
+        top_stations['arrivals_norm'] = 0.5
+
+    if max_departures > min_departures:
+        top_stations['departures_norm'] = (top_stations['departures'] - min_departures) / (
+                    max_departures - min_departures)
+    else:
+        top_stations['departures_norm'] = 0.5
+
+    # Also scale X and Y axis data
+    top_stations['arrivals_scaled'] = (top_stations['arrivals'] - min_arrivals) / (max_arrivals - min_arrivals)
+    top_stations['departures_scaled'] = (top_stations['departures'] - min_departures) / (
+                max_departures - min_departures)
+
+    # Create scatter plot
+    fig = go.Figure()
+
+    # Define spider arm angles (2 directions: up for departures, down for arrivals)
+    angles = [np.pi / 2, -np.pi / 2]  # Up and down
+
+    # Color stations by net balance
+    top_stations['color'] = top_stations['net_balance'].apply(
+        lambda x: '#FF6B6B' if x > 0 else '#69DB7C' if x < 0 else '#4DABF7'
+    )
+
+    # Create spider arms for each station
+    for _, station in top_stations.iterrows():
+        station_x = station['arrivals_scaled']
+        station_y = station['departures_scaled']
+
+        # Spider arms: up for departures, down for arrivals
+        values = [station['departures_norm'], station['arrivals_norm']]
+
+        # Create spider arms
+        for i, (angle, value) in enumerate(zip(angles, values)):
+            # Calculate arm length - make them more visible
+            arm_length = 80 + value * 150  # Longer base length + more scaling
+
+            # Calculate end point
+            end_x = station_x + arm_length * np.cos(angle)
+            end_y = station_y + arm_length * np.sin(angle)
+
+            # Different line styles for arrivals vs departures
+            line_width = 2 if i == 0 else 1  # Thick for departures, thin for arrivals
+
+            # Add spider arm line
+            fig.add_trace(go.Scatter(
+                x=[station_x, end_x],
+                y=[station_y, end_y],
+                mode='lines',
+                line=dict(color=station['color'], width=line_width),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+
+            # Add small marker at end of arm
+            fig.add_trace(go.Scatter(
+                x=[end_x],
+                y=[end_y],
+                mode='markers',
+                marker=dict(size=3, color=station['color'], symbol='circle'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+
+    # Add center points (stations)
+    for color_val, color_name in [('#FF6B6B', 'More Departures'), ('#69DB7C', 'More Arrivals'),
+                                  ('#4DABF7', 'Balanced')]:
+        color_stations = top_stations[top_stations['color'] == color_val]
+
+        if len(color_stations) > 0:
+            fig.add_trace(go.Scatter(
+                x=color_stations['arrivals_scaled'],
+                y=color_stations['departures_scaled'],
+                mode='markers',
+                marker=dict(size=6, color=color_val, symbol='circle'),
+                text=color_stations['station_name'],
+                hovertemplate='<b>%{text}</b><br>' +
+                              'Arrivals: %{customdata[0]}<br>' +
+                              'Departures: %{customdata[1]}<br>' +
+                              'Net Balance: %{customdata[2]}<extra></extra>',
+                customdata=color_stations[['arrivals', 'departures', 'net_balance']].values,
+                name=color_name,
+                showlegend=True
+            ))
+
+    # Add reference lines for line styles
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None],
+        mode='lines',
+        line=dict(color='gray', width=3),
+        name='Departures (thick lines)',
+        showlegend=True
+    ))
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None],
+        mode='lines',
+        line=dict(color='gray', width=1),
+        name='Arrivals (thin lines)',
+        showlegend=True
+    ))
+
+    fig.update_layout(
+        title=f"Arrivals vs Departures Spider Scatter Plot ({selected_month.strftime('%B %Y')})",
+        xaxis_title="Arrivals (Min-Max Scaled: 0-1)",
+        yaxis_title="Departures (Min-Max Scaled: 0-1)",
+        height=600,
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02,
+            bgcolor="rgba(40,40,40,0.9)",  # Dark background
+            bordercolor="white",
+            borderwidth=1,
+            font=dict(color="white", size=12)
+        ),
+        annotations=[
+            dict(
+                text="<b>ARRIVALS vs DEPARTURES SPIDER PLOT:</b><br><br>" +
+                     "<b>X-axis:</b> Arrivals (Min-Max Scaled)<br>" +
+                     "<b>Y-axis:</b> Departures (Min-Max Scaled)<br><br>" +
+                     "<b>Spider Arms (from each station point):</b><br>" +
+                     "↑ <b>Up:</b> Departures (thick lines, min-max scaled)<br>" +
+                     "↓ <b>Down:</b> Arrivals (thin lines, min-max scaled)<br><br>" +
+                     "<b>Station Colors:</b><br>" +
+                     "🔴 Red = More Departures than Arrivals<br>" +
+                     "🟢 Green = More Arrivals than Departures<br>" +
+                     "🔵 Blue = Balanced (Equal Arrivals/Departures)<br><br>" +
+                     "<b>Diagonal Line:</b> Perfect balance (scaled Y=X)<br>" +
+                     "<b>Above Diagonal:</b> More departures than arrivals<br>" +
+                     "<b>Below Diagonal:</b> More arrivals than departures<br><br>" +
+                     "<b>Scaling:</b> All values normalized to 0-1 range<br>" +
+                     "<b>Showing:</b> Top 200 stations by total activity",
+                showarrow=False,
+                xref="paper", yref="paper",
+                x=0.02, y=0.98,
+                xanchor="left", yanchor="top",
+                bgcolor="rgba(40,40,40,0.9)",  # Dark background
+                bordercolor="white",
+                borderwidth=1,
+                font=dict(size=9, color="white")
+            )
+        ]
     )
 
     return fig
