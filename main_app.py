@@ -84,7 +84,10 @@ def main():
             fig = create_map_visualization(df_day, radius_m, categories)
             st.plotly_chart(fig, use_container_width=True)
 
-        # Spider Plot for the entire month
+        # Daily Time-Series Clustering by Month
+        render_daily_time_series_section(combined)
+
+        # Spider Plot for the entire month (moved to end)
         st.subheader(f"Monthly Station Analysis - {sel_date.strftime('%B %Y')}")
         try:
             fig_spider = create_spider_plot_for_month(combined, sel_date)
@@ -115,9 +118,6 @@ def main():
                 st.info("No data available for spider plot in this month.")
         except Exception as e:
             st.error(f"Error creating spider plot: {e}")
-
-        # Daily Time-Series Clustering by Month
-        render_daily_time_series_section(combined)
 
     elif mode == "Timeline Map":
         # Timeline mode
@@ -217,7 +217,7 @@ def render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, select
         # 2. Daily Patterns with Trend Lines (Z-Score only)
         render_daily_patterns_plot(cluster_data, day_labels, month_options, selected_month_str, colors)
 
-        # 3. Cluster Statistics and Insights (centered)
+        # 3. Cluster Statistics and Insights (centered) - MODIFIED
         render_cluster_statistics(cluster_data)
 
         # 4. Model Enhancement Suggestions
@@ -326,7 +326,7 @@ def render_daily_patterns_plot(cluster_data, day_labels, month_options, selected
 
 
 def render_cluster_statistics(cluster_data):
-    """Render cluster statistics and insights"""
+    """Render cluster statistics and insights - MODIFIED to remove trend and behavior"""
     # Center the statistics table
     col1, col2, col3 = st.columns([1, 2, 1])
 
@@ -340,14 +340,13 @@ def render_cluster_statistics(cluster_data):
                 'Max': f"{cluster_info['max_value']:.0f}",
                 'Min': f"{cluster_info['min_value']:.0f}",
                 'Volatility': f"{cluster_info['volatility']:.0f}",
-                'Trend Slope': f"{cluster_info['trend_slope']:.1f}",
-                'Direction': cluster_info['trend']
+                'Trend Slope': f"{cluster_info['trend_slope']:.1f}"
             })
 
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, use_container_width=True)
 
-    # Simplified Cluster Insights
+    # Simplified Cluster Insights - REMOVED trend and behavior descriptions
     insights_cols = st.columns(len(cluster_data))
     for i, cluster_info in enumerate(cluster_data):
         with insights_cols[i]:
@@ -355,25 +354,6 @@ def render_cluster_statistics(cluster_data):
             st.metric("Stations", cluster_info['stations'])
             st.metric("Peak Balance", f"{cluster_info['max_value']:.0f}")
             st.metric("Trend Slope", f"{cluster_info['trend_slope']:.1f}")
-
-            # Determine cluster behavior for daily patterns
-            if cluster_info['volatility'] > 30:
-                behavior = "🌊 Highly Variable"
-            elif cluster_info['volatility'] > 10:
-                behavior = "📈 Moderately Variable"
-            else:
-                behavior = "📊 Stable"
-
-            # Trend interpretation
-            if abs(cluster_info['trend_slope']) < 0.5:
-                trend_desc = "🔄 Stable"
-            elif cluster_info['trend_slope'] > 0:
-                trend_desc = "📈 Growing Demand"
-            else:
-                trend_desc = "📉 Declining Demand"
-
-            st.write(f"**Behavior:** {behavior}")
-            st.write(f"**Trend:** {trend_desc}")
 
 
 def render_model_suggestions():
@@ -485,99 +465,267 @@ def render_timeline_mode(combined, dates):
 
 
 def render_models_map_mode(combined, dates):
-    """Render the advanced models map interface"""
+    """Render the advanced models map interface - showing all models together"""
     st.subheader("Advanced Analytics Models")
 
-    # Model selection
-    st.sidebar.header("Model Selection")
-    selected_model = st.sidebar.selectbox(
-        "Choose Model:",
-        ["ARIMA Forecast", "Prophet Forecast", "Peak/Off-Peak Prediction", "Weather Impact Analysis",
-         "Anomaly Detection"]
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # STATION SELECTION MAP
+    # ═══════════════════════════════════════════════════════════════════════════════
+    st.subheader("🗺️ Select Station from Map")
+
+    # Create station selection map
+    available_stations = sorted(combined['station_name'].unique())
+    station_coords = combined[['station_name', 'lat', 'lng']].drop_duplicates().reset_index(drop=True)
+
+    # Initialize session state for selected station if not exists
+    if 'selected_station_models' not in st.session_state:
+        st.session_state.selected_station_models = available_stations[0]
+
+    # Create interactive station selection map
+    fig_station_map = go.Figure()
+
+    # Add all stations to the map with more subtle styling
+    fig_station_map.add_trace(go.Scattermapbox(
+        lat=station_coords['lat'],
+        lon=station_coords['lng'],
+        mode='markers',
+        marker=dict(
+            size=6,
+            color='rgba(70, 130, 180, 0.6)',  # Steel blue with transparency
+            opacity=0.8
+        ),
+        text=station_coords['station_name'],
+        hovertemplate="<b>%{text}</b><br>Click to select<extra></extra>",
+        name="Available Stations",
+        showlegend=False,
+        customdata=station_coords['station_name']  # Store station names for click events
+    ))
+
+    # Highlight selected station with more prominent but not overwhelming styling
+    if st.session_state.selected_station_models in station_coords['station_name'].values:
+        selected_coords = station_coords[station_coords['station_name'] == st.session_state.selected_station_models]
+        if not selected_coords.empty:
+            fig_station_map.add_trace(go.Scattermapbox(
+                lat=selected_coords['lat'],
+                lon=selected_coords['lng'],
+                mode='markers',
+                marker=dict(
+                    size=12,
+                    color='rgba(220, 20, 60, 0.9)',  # Crimson red with slight transparency
+                    opacity=1.0,
+                    symbol='circle'
+                ),
+                text=selected_coords['station_name'],
+                hovertemplate="<b>%{text}</b><br>🎯 Selected Station<extra></extra>",
+                name="Selected Station",
+                showlegend=False
+            ))
+
+    fig_station_map.update_layout(
+        mapbox=dict(
+            style="open-street-map",
+            center=dict(lat=40.7128, lon=-74.0060),
+            zoom=11
+        ),
+        height=450,
+        margin=dict(l=0, r=0, t=0, b=0),
+        showlegend=False  # Hide legend for cleaner look
     )
 
-    if selected_model in ["ARIMA Forecast", "Prophet Forecast"]:
-        # Station selection for forecasting models
-        st.sidebar.header("Forecast Settings")
-        available_stations = sorted(combined['station_name'].unique())
-        selected_station = st.sidebar.selectbox("Select Station:", available_stations)
-        forecast_days = st.sidebar.slider("Forecast Days:", 3, 14, 7)
+    # Display the map and capture click events
+    map_click = st.plotly_chart(
+        fig_station_map,
+        use_container_width=True,
+        key="station_selection_map",
+        on_select="rerun"
+    )
 
-        if selected_model == "ARIMA Forecast":
-            st.subheader(f"ARIMA Forecast - {selected_station}")
+    # Handle map click events
+    if map_click and map_click.get('selection') and map_click['selection'].get('points'):
+        clicked_points = map_click['selection']['points']
+        if clicked_points:
+            # Get the clicked station name
+            clicked_station = clicked_points[0].get('customdata')
+            if clicked_station and clicked_station in available_stations:
+                st.session_state.selected_station_models = clicked_station
+                st.rerun()
 
-            with st.spinner("Running ARIMA model..."):
-                try:
-                    fig, message = create_arima_forecast(combined, selected_station, forecast_days)
-                    if fig.data:
-                        st.plotly_chart(fig, use_container_width=True)
-                        st.success(message)
-                    else:
-                        st.error(message)
-                except Exception as e:
-                    st.error(f"ARIMA forecast error: {e}")
+    # Station selection controls
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        # Dropdown as primary selection method
+        selected_station_dropdown = st.selectbox(
+            "Select Station:",
+            available_stations,
+            index=available_stations.index(
+                st.session_state.selected_station_models) if st.session_state.selected_station_models in available_stations else 0,
+            key="station_dropdown",
+            help="Choose a station for forecasting analysis"
+        )
 
-        elif selected_model == "Prophet Forecast":
-            st.subheader(f"Prophet Forecast - {selected_station}")
+        # Update session state if dropdown changes
+        if selected_station_dropdown != st.session_state.selected_station_models:
+            st.session_state.selected_station_models = selected_station_dropdown
+            st.rerun()
 
-            with st.spinner("Running Prophet model..."):
-                try:
-                    fig, message = create_prophet_forecast(combined, selected_station, forecast_days)
-                    if fig.data:
-                        st.plotly_chart(fig, use_container_width=True)
-                        st.success(message)
-                    else:
-                        st.error(message)
-                except Exception as e:
-                    st.error(f"Prophet forecast error: {e}")
+    with col2:
+        # Show selected station info with better styling
+        selected_info = f"**Selected Station:**\n{st.session_state.selected_station_models}"
+        st.success(selected_info)
 
-    elif selected_model == "Peak/Off-Peak Prediction":
-        st.sidebar.header("Peak Analysis Settings")
-        analysis_date = st.sidebar.date_input("Analysis Date:", value=dates[0], min_value=dates[0], max_value=dates[-1])
+        # Show station coordinates
+        if st.session_state.selected_station_models in station_coords['station_name'].values:
+            coords = station_coords[station_coords['station_name'] == st.session_state.selected_station_models].iloc[0]
+            st.caption(f"📍 Coordinates: {coords['lat']:.4f}, {coords['lng']:.4f}")
 
-        st.subheader(f"Peak/Off-Peak Analysis - {analysis_date.strftime('%d/%m/%y')}")
+    # Improved usage instructions
+    st.info(
+        "💡 **How to select a station:** Use the dropdown menu above or click on any station marker in the map. The selected station will be highlighted in red.")
 
-        with st.spinner("Analyzing peak periods..."):
-            try:
-                fig = predict_peak_periods(combined, analysis_date)
-                if fig.data:
-                    st.plotly_chart(fig, use_container_width=True)
+    selected_station = st.session_state.selected_station_models
 
-                    # Show statistics
-                    df_day = combined[combined['date'] == analysis_date]
-                    if not df_day.empty:
-                        df_day['total_activity'] = df_day['departures'] + df_day['arrivals']
-                        peak_threshold = df_day['total_activity'].quantile(0.75)
-                        peak_stations = len(df_day[df_day['total_activity'] >= peak_threshold])
-                        total_stations = len(df_day)
+    st.markdown("---")
 
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Total Stations", total_stations)
-                        with col2:
-                            st.metric("Peak Stations", peak_stations)
-                        with col3:
-                            st.metric("Peak Threshold", f"{peak_threshold:.0f} rides")
-                else:
-                    st.warning("No data available for peak analysis")
-            except Exception as e:
-                st.error(f"Peak analysis error: {e}")
+    # Global settings in sidebar
+    st.sidebar.header("Global Settings")
 
-    elif selected_model == "Weather Impact Analysis":
-        st.sidebar.header("Weather Analysis Settings")
-        start_date = st.sidebar.date_input("Start Date:", value=dates[0], min_value=dates[0], max_value=dates[-1])
-        end_date = st.sidebar.date_input("End Date:", value=min(dates[-1], dates[0] + pd.Timedelta(days=30)),
-                                         min_value=dates[0], max_value=dates[-1])
+    # Date settings for different analyses
+    analysis_date = st.sidebar.date_input("Analysis Date:", value=dates[0], min_value=dates[0], max_value=dates[-1])
 
-        st.subheader(f"Weather Impact Analysis")
+    # Weather analysis date range
+    st.sidebar.subheader("Weather Analysis Range")
+    weather_start_date = st.sidebar.date_input("Start Date:", value=dates[0], min_value=dates[0], max_value=dates[-1],
+                                               key="weather_start")
+    weather_end_date = st.sidebar.date_input("End Date:", value=min(dates[-1], dates[0] + pd.Timedelta(days=30)),
+                                             min_value=dates[0], max_value=dates[-1], key="weather_end")
 
-        if start_date > end_date:
-            st.error("Start date must be before end date.")
-            return
+    # Anomaly detection settings
+    z_threshold = st.sidebar.slider("Z-Score Threshold (Anomaly Detection):", 1.5, 4.0, 2.5, 0.1)
 
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # 1. ARIMA FORECAST
+    # ═══════════════════════════════════════════════════════════════════════════════
+    st.subheader("🔮 ARIMA Forecast")
+
+    # Forecast days control moved to main area
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        forecast_days_arima = st.slider("Forecast Days:", 3, 14, 7, key="arima_days")
+    with col2:
+        st.write(f"**Station:** {selected_station}")
+
+    with st.spinner("Running ARIMA model..."):
+        try:
+            fig, message = create_arima_forecast(combined, selected_station, forecast_days_arima)
+            if fig.data:
+                st.plotly_chart(fig, use_container_width=True)
+                st.success(message)
+            else:
+                st.error(message)
+        except Exception as e:
+            st.error(f"ARIMA forecast error: {e}")
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # 2. PROPHET FORECAST
+    # ═══════════════════════════════════════════════════════════════════════════════
+    st.subheader("📈 Prophet Forecast")
+
+    # Forecast days control moved to main area
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        forecast_days_prophet = st.slider("Forecast Days:", 3, 14, 7, key="prophet_days")
+    with col2:
+        st.write(f"**Station:** {selected_station}")
+
+    with st.spinner("Running Prophet model..."):
+        try:
+            fig, message = create_prophet_forecast(combined, selected_station, forecast_days_prophet)
+            if fig.data:
+                st.plotly_chart(fig, use_container_width=True)
+                st.success(message)
+            else:
+                st.error(message)
+        except Exception as e:
+            st.error(f"Prophet forecast error: {e}")
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # 3. PEAK/OFF-PEAK PREDICTION
+    # ═══════════════════════════════════════════════════════════════════════════════
+    st.subheader(f"⏰ Peak/Off-Peak Analysis - {analysis_date.strftime('%d/%m/%y')}")
+
+    with st.spinner("Analyzing peak periods..."):
+        try:
+            fig = predict_peak_periods(combined, analysis_date)
+            if fig.data:
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Show statistics
+                df_day = combined[combined['date'] == analysis_date]
+                if not df_day.empty:
+                    df_day['total_activity'] = df_day['departures'] + df_day['arrivals']
+                    peak_threshold = df_day['total_activity'].quantile(0.75)
+                    peak_stations = len(df_day[df_day['total_activity'] >= peak_threshold])
+                    total_stations = len(df_day)
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Stations", total_stations)
+                    with col2:
+                        st.metric("Peak Stations", peak_stations)
+                    with col3:
+                        st.metric("Peak Threshold", f"{peak_threshold:.0f} rides")
+            else:
+                st.warning("No data available for peak analysis")
+        except Exception as e:
+            st.error(f"Peak analysis error: {e}")
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # 4. ANOMALY DETECTION
+    # ═══════════════════════════════════════════════════════════════════════════════
+    st.subheader(f"🚨 Anomaly Detection - {analysis_date.strftime('%d/%m/%y')}")
+
+    st.write(f"**Z-Score Threshold:** {z_threshold}")
+
+    with st.spinner("Detecting anomalies..."):
+        try:
+            fig, message = detect_station_anomalies(combined, analysis_date, z_threshold)
+
+            if fig.data:
+                st.plotly_chart(fig, use_container_width=True)
+                st.info(message)
+
+                # Show threshold info
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Z-Score Threshold", f"{z_threshold}")
+                with col2:
+                    st.metric("Sensitivity", "Higher" if z_threshold < 2.5 else "Lower")
+            else:
+                st.warning("No data available for anomaly detection")
+        except Exception as e:
+            st.error(f"Anomaly detection error: {e}")
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # 5. WEATHER IMPACT ANALYSIS (MOVED TO END)
+    # ═══════════════════════════════════════════════════════════════════════════════
+    st.subheader("🌤️ Weather Impact Analysis")
+
+    st.write(f"**Date Range:** {weather_start_date.strftime('%d/%m/%y')} - {weather_end_date.strftime('%d/%m/%y')}")
+
+    if weather_start_date > weather_end_date:
+        st.error("Start date must be before end date.")
+    else:
         with st.spinner("Loading weather data and analyzing impact..."):
             try:
-                weather_data = load_weather(start_date, end_date)
+                weather_data = load_weather(weather_start_date, weather_end_date)
                 fig, message = create_weather_impact_analysis(combined, weather_data)
 
                 if fig.data:
@@ -587,32 +735,6 @@ def render_models_map_mode(combined, dates):
                     st.error(message)
             except Exception as e:
                 st.error(f"Weather analysis error: {e}")
-
-    elif selected_model == "Anomaly Detection":
-        st.sidebar.header("Anomaly Detection Settings")
-        anomaly_date = st.sidebar.date_input("Analysis Date:", value=dates[0], min_value=dates[0], max_value=dates[-1])
-        z_threshold = st.sidebar.slider("Z-Score Threshold:", 1.5, 4.0, 2.5, 0.1)
-
-        st.subheader(f"Anomaly Detection - {anomaly_date.strftime('%d/%m/%y')}")
-
-        with st.spinner("Detecting anomalies..."):
-            try:
-                fig, message = detect_station_anomalies(combined, anomaly_date, z_threshold)
-
-                if fig.data:
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.info(message)
-
-                    # Show threshold info
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Z-Score Threshold", f"{z_threshold}")
-                    with col2:
-                        st.metric("Sensitivity", "Higher" if z_threshold < 2.5 else "Lower")
-                else:
-                    st.warning("No data available for anomaly detection")
-            except Exception as e:
-                st.error(f"Anomaly detection error: {e}")
 
 
 if __name__ == "__main__":

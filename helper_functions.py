@@ -1,4 +1,4 @@
-from turtle import st
+import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -23,99 +23,6 @@ months = {
     "202503": "March 2025",
     "202506": "June 2025"
 }
-
-
-
-def create_prophet_forecast(combined, selected_station, forecast_days=7):
-    """Create Prophet forecast with seasonality"""
-    try:
-        # Try importing Prophet with proper error handling
-        import warnings
-        warnings.filterwarnings('ignore')
-
-        try:
-            from prophet import Prophet
-        except ImportError:
-            try:
-                from fbprophet import Prophet  # Alternative import name
-            except ImportError:
-                return go.Figure(), "Prophet library not installed. Please install with: pip install prophet"
-
-        # Get station data
-        station_data = combined[combined['station_name'] == selected_station].copy()
-        station_data['date'] = pd.to_datetime(station_data['date'])
-        station_data = station_data.sort_values('date')
-        station_data['net_balance'] = station_data['departures'] - station_data['arrivals']
-
-        if len(station_data) < 14:
-            return go.Figure(), "Insufficient data for Prophet forecast"
-
-        # Prepare Prophet format
-        prophet_df = station_data[['date', 'net_balance']].rename(columns={'date': 'ds', 'net_balance': 'y'})
-
-        # Fit Prophet model
-        model = Prophet(daily_seasonality=True, weekly_seasonality=True)
-        model.fit(prophet_df)
-
-        # Create future dataframe
-        future = model.make_future_dataframe(periods=forecast_days)
-        forecast = model.predict(future)
-
-        # Create plot
-        fig = go.Figure()
-
-        # Historical data
-        fig.add_trace(go.Scatter(
-            x=prophet_df['ds'],
-            y=prophet_df['y'],
-            mode='lines+markers',
-            name='Historical',
-            line=dict(color='steelblue', width=2)
-        ))
-
-        # Forecast
-        forecast_future = forecast.tail(forecast_days)
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat'],
-            mode='lines+markers',
-            name='Forecast',
-            line=dict(color='red', width=2, dash='dash')
-        ))
-
-        # Uncertainty intervals
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat_upper'],
-            mode='lines',
-            line=dict(color='rgba(255,0,0,0.3)', width=0),
-            showlegend=False
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat_lower'],
-            mode='lines',
-            fill='tonexty',
-            fillcolor='rgba(255,0,0,0.2)',
-            line=dict(color='rgba(255,0,0,0.3)', width=0),
-            name='Uncertainty',
-            showlegend=True
-        ))
-
-        fig.update_layout(
-            title=f"Prophet Forecast - {selected_station}",
-            xaxis_title="Date",
-            yaxis_title="Net Balance",
-            height=400
-        )
-
-        return fig, f"Prophet forecast successful for {forecast_days} days"
-
-    except Exception as e:
-        return go.Figure(), f"Prophet forecast failed: {str(e)}"
-        import streamlit as st
-
 
 
 # ── DATA LOADING AND PREPARATION ───────────────────────────────────────────────
@@ -713,7 +620,7 @@ def create_spider_plot_for_month(combined, selected_date):
 # ── ADVANCED MODELS ────────────────────────────────────────────────────────────
 
 def create_arima_forecast(combined, selected_station, forecast_days=7):
-    """Create ARIMA forecast for a selected station"""
+    """Create ARIMA forecast for a selected station using only the past 2 weeks"""
     try:
         from statsmodels.tsa.arima.model import ARIMA
 
@@ -723,30 +630,61 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         station_data = station_data.sort_values('date')
         station_data['net_balance'] = station_data['departures'] - station_data['arrivals']
 
-        if len(station_data) < 14:  # Need minimum data
-            return go.Figure(), "Insufficient data for ARIMA forecast"
+        if len(station_data) < 7:  # Need minimum data
+            return go.Figure(), "Insufficient data for ARIMA forecast (need at least 7 days)"
 
-        # Prepare time series
-        ts = station_data.set_index('date')['net_balance']
+        # Use only the most recent 2 weeks (14 days) for better short-term prediction
+        recent_data = station_data.tail(14)
 
-        # Fit ARIMA model (simple auto-selection)
-        model = ARIMA(ts, order=(1, 1, 1))
-        fitted_model = model.fit()
+        if len(recent_data) < 7:
+            return go.Figure(), "Insufficient recent data for ARIMA forecast"
+
+        # Prepare time series from recent data
+        ts = recent_data.set_index('date')['net_balance']
+
+        # Fit ARIMA model with parameters optimized for short-term bike share data
+        # (1,0,1) often works well for daily bike share patterns
+        try:
+            model = ARIMA(ts, order=(1, 0, 1))
+            fitted_model = model.fit()
+        except:
+            # Fallback to simpler model if convergence issues
+            try:
+                model = ARIMA(ts, order=(1, 1, 0))
+                fitted_model = model.fit()
+            except:
+                # Final fallback
+                model = ARIMA(ts, order=(0, 1, 1))
+                fitted_model = model.fit()
 
         # Generate forecast
         forecast = fitted_model.forecast(steps=forecast_days)
         forecast_index = pd.date_range(start=ts.index[-1] + pd.Timedelta(days=1), periods=forecast_days)
 
+        # Calculate confidence intervals
+        forecast_ci = fitted_model.get_forecast(steps=forecast_days).conf_int()
+
         # Create plot
         fig = go.Figure()
 
-        # Historical data
+        # Historical data (show all available data for context, but with lighter styling)
+        fig.add_trace(go.Scatter(
+            x=station_data.set_index('date').index,
+            y=station_data.set_index('date')['net_balance'].values,
+            mode='lines',
+            name='All Historical Data',
+            line=dict(color='lightgray', width=1),
+            opacity=0.4
+        ))
+
+        # Recent data used for training (past 2 weeks)
         fig.add_trace(go.Scatter(
             x=ts.index,
             y=ts.values,
             mode='lines+markers',
-            name='Historical',
-            line=dict(color='steelblue', width=2)
+            name='Recent Data (Used for Training)',
+            line=dict(color='steelblue', width=2),
+            marker=dict(size=6)
         ))
 
         # Forecast
@@ -755,17 +693,70 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
             y=forecast,
             mode='lines+markers',
             name='Forecast',
-            line=dict(color='red', width=2, dash='dash')
+            line=dict(color='red', width=3, dash='dash'),
+            marker=dict(size=8)
         ))
 
+        # Confidence intervals
+        fig.add_trace(go.Scatter(
+            x=forecast_index,
+            y=forecast_ci.iloc[:, 1],  # Upper bound
+            mode='lines',
+            line=dict(color='rgba(255,0,0,0.3)', width=0),
+            showlegend=False
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=forecast_index,
+            y=forecast_ci.iloc[:, 0],  # Lower bound
+            mode='lines',
+            fill='tonexty',
+            fillcolor='rgba(255,0,0,0.2)',
+            line=dict(color='rgba(255,0,0,0.3)', width=0),
+            name='Confidence Interval',
+            showlegend=True
+        ))
+
+        # Calculate date range for zooming (recent data + forecast + small buffer)
+        zoom_start = ts.index[0] - pd.Timedelta(days=1)  # Start slightly before recent data
+        zoom_end = forecast_index[-1] + pd.Timedelta(days=1)  # End slightly after forecast
+
+        # Calculate y-axis range for better visualization
+        recent_values = ts.values
+        forecast_values = forecast.values
+        all_focus_values = np.concatenate([recent_values, forecast_values])
+        y_min = np.min(all_focus_values)
+        y_max = np.max(all_focus_values)
+        y_buffer = (y_max - y_min) * 0.1  # 10% buffer
+
         fig.update_layout(
-            title=f"ARIMA Forecast - {selected_station}",
+            title=f"ARIMA Forecast - {selected_station} (Using Past {len(recent_data)} Days)",
             xaxis_title="Date",
             yaxis_title="Net Balance",
-            height=400
+            height=500,
+            # Zoom in on recent data and forecast by default
+            xaxis=dict(
+                range=[zoom_start, zoom_end],
+                showgrid=True,
+                gridwidth=1,
+                gridcolor='lightgray'
+            ),
+            yaxis=dict(
+                range=[y_min - y_buffer, y_max + y_buffer],
+                showgrid=True,
+                gridwidth=1,
+                gridcolor='lightgray'
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="left",
+                x=0
+            )
         )
 
-        return fig, f"ARIMA forecast successful for {forecast_days} days"
+        return fig, f"ARIMA forecast successful for {forecast_days} days using past {len(recent_data)} days of data"
 
     except Exception as e:
         return go.Figure(), f"ARIMA forecast failed: {str(e)}"
@@ -774,7 +765,17 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
 def create_prophet_forecast(combined, selected_station, forecast_days=7):
     """Create Prophet forecast with seasonality"""
     try:
-        from prophet import Prophet
+        # Try importing Prophet with proper error handling
+        import warnings
+        warnings.filterwarnings('ignore')
+
+        try:
+            from prophet import Prophet
+        except ImportError:
+            try:
+                from fbprophet import Prophet  # Alternative import name
+            except ImportError:
+                return go.Figure(), "Prophet library not installed. Please install with: pip install prophet"
 
         # Get station data
         station_data = combined[combined['station_name'] == selected_station].copy()
@@ -951,7 +952,7 @@ def create_weather_impact_analysis(combined, weather_data):
                 'temp_correlation': temp_corr if not np.isnan(temp_corr) else 0,
                 'humidity_correlation': humidity_corr if not np.isnan(humidity_corr) else 0,
                 'weather_sensitivity': abs(temp_corr) + abs(humidity_corr) if not (
-                            np.isnan(temp_corr) or np.isnan(humidity_corr)) else 0
+                        np.isnan(temp_corr) or np.isnan(humidity_corr)) else 0
             })
 
     if not weather_correlations:
