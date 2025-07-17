@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 from datetime import date
 import plotly.express as px
+import datetime
 
 # Import helper functions
 from helper_functions import (
@@ -17,13 +18,34 @@ from helper_functions import (
     create_time_series_cluster_map,
     create_timeline_map,
     create_daily_rides_bar_chart,
+    create_daily_rides_continuous_plot,
+    create_spider_glyph_month,
+    create_spider_glyph_distance,
+    create_spider_glyph_balance_ratio,
+    create_spider_glyph_activity_density,
+    create_time_wheel_plot,
     create_spider_plot_for_month,
-    create_arrivals_departures_spider_plot,
+    create_temporal_pattern_spider,
+    create_station_role_spider,
+    create_cluster_comparison_spider,
     create_arima_forecast,
-    predict_peak_periods,
-    create_weather_impact_analysis,
-    detect_station_anomalies
+    create_prophet_forecast,
+    predict_peak_periods_standalone,
+    detect_station_anomalies,
+    create_arrivals_departures_spider_plot,
+    create_weekly_seasonal_plot
 )
+
+# ── APPLICATION CONFIGURATION ──────────────────────────────────────────────────
+# Performance Settings - Adjust these to use more or less data
+MAX_STATIONS_GLOBAL = 200  # Global maximum for main data loading
+MAX_STATIONS_COMPLEX_VIZ = 100  # For complex visualizations (spider plots, etc.)
+MAX_STATIONS_SIMPLE_VIZ = 200  # For simple visualizations (maps, charts)
+
+# You can increase these values for better analysis at the cost of performance:
+# - For small datasets or powerful hardware: try 500-1000+
+# - For medium datasets: try 300-500  
+# - For large datasets or slower hardware: keep at 200 or lower
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -37,8 +59,30 @@ st.set_page_config(
 def main():
     st.title("NYC Citibike Station Visualization")
 
-    # Load data
-    data = load_processed_data()
+    # Initialize session state for performance settings
+    if 'max_stations_global' not in st.session_state:
+        st.session_state.max_stations_global = MAX_STATIONS_GLOBAL
+    if 'max_stations_simple_viz' not in st.session_state:
+        st.session_state.max_stations_simple_viz = MAX_STATIONS_SIMPLE_VIZ
+    if 'max_stations_complex_viz' not in st.session_state:
+        st.session_state.max_stations_complex_viz = MAX_STATIONS_COMPLEX_VIZ
+    if 'use_test_data' not in st.session_state:
+        st.session_state.use_test_data = False
+
+    # Data source selection
+    st.sidebar.header("📊 Data Source")
+    use_test_data = st.sidebar.checkbox(
+        "Use Test Data (for presentations)", 
+        value=st.session_state.use_test_data,
+        help="Use lightweight synthetic data instead of CSV files. Perfect for demos and presentations!"
+    )
+    st.session_state.use_test_data = use_test_data
+
+    # Load data with configurable limit
+    data = load_processed_data(
+        max_stations=st.session_state.max_stations_global,
+        use_test_data=st.session_state.use_test_data
+    )
     if not data:
         st.error("No data loaded.")
         return
@@ -51,6 +95,60 @@ def main():
     # Map mode selection
     st.sidebar.header("Map Mode")
     mode = st.sidebar.radio("Choose view:", ["Main Map", "Timeline Map", "Models Map"])
+    
+    # Performance configuration
+    st.sidebar.markdown("---")
+    st.sidebar.header("⚙️ Performance Settings")
+    
+    # Advanced settings toggle
+    show_advanced = st.sidebar.checkbox("Show Advanced Settings", help="Adjust data limits for performance tuning")
+    
+    if show_advanced:
+        st.sidebar.markdown("**Data Limits:**")
+        
+        # Allow users to override the default settings
+        global_limit = st.sidebar.slider(
+            "Global Data Limit:", 
+            min_value=50, 
+            max_value=2000, 
+            value=st.session_state.max_stations_global,
+            step=50,
+            help="Maximum stations for main data loading. Higher = more data but slower performance."
+        )
+        
+        simple_viz_limit = st.sidebar.slider(
+            "Simple Visualizations:", 
+            min_value=50, 
+            max_value=1000, 
+            value=st.session_state.max_stations_simple_viz,
+            step=50,
+            help="Maximum stations for maps and basic charts."
+        )
+        
+        complex_viz_limit = st.sidebar.slider(
+            "Complex Visualizations:", 
+            min_value=25, 
+            max_value=500, 
+            value=st.session_state.max_stations_complex_viz,
+            step=25,
+            help="Maximum stations for clustering and spider plots."
+        )
+        
+        # Update session state if user changed them
+        if global_limit != st.session_state.max_stations_global:
+            st.session_state.max_stations_global = global_limit
+            st.cache_data.clear()  # Clear cache when limits change
+            
+        if simple_viz_limit != st.session_state.max_stations_simple_viz:
+            st.session_state.max_stations_simple_viz = simple_viz_limit
+            
+        if complex_viz_limit != st.session_state.max_stations_complex_viz:
+            st.session_state.max_stations_complex_viz = complex_viz_limit
+        
+        st.sidebar.info(f"Current limits: {global_limit}/{simple_viz_limit}/{complex_viz_limit}")
+        
+    else:
+        st.sidebar.info(f"Using default limits: {st.session_state.max_stations_global}/{st.session_state.max_stations_simple_viz}/{st.session_state.max_stations_complex_viz}")
 
     # Add clear cache button
     st.sidebar.markdown("---")
@@ -76,94 +174,211 @@ def main():
         # Main Map with date picker above it
         sel_date = st.date_input("Select Date:", value=dates[0], min_value=dates[0], max_value=dates[-1])
 
+        # 1. STATION ACTIVITY MAP
+        st.header("📍 Station Activity Map")
         df_day = combined[combined["date"] == sel_date]
         if df_day.empty:
             st.warning("No data for this date.")
         else:
-            fig = create_map_visualization(df_day, radius_m, categories)
+            fig = create_map_visualization(df_day, radius_m, categories, max_stations=st.session_state.max_stations_simple_viz)
             st.plotly_chart(fig, use_container_width=True)
 
-        # Daily Time-Series Clustering by Month
-        render_daily_time_series_section(combined)
+        # 2. DAILY RIDES OVERVIEW
+        st.header("📊 Daily Rides Overview")
+        st.write("Shows total bike rides and patterns over time with simulated hourly granularity")
+        
+        # Chart type selection
+        chart_type = st.radio(
+            "Select chart type:",
+            ["Continuous Time Series (Hourly)", "Daily Bar Chart"],
+            horizontal=True
+        )
+        
+        # Date range selection for daily overview
+        col1, col2 = st.columns(2)
+        with col1:
+            overview_start = st.date_input(
+                "Overview Start Date", 
+                value=dates[0],
+                min_value=dates[0],
+                max_value=dates[-1]
+            )
+        with col2:
+            overview_end = st.date_input(
+                "Overview End Date", 
+                value=min(dates[0] + datetime.timedelta(days=14), dates[-1]),
+                min_value=dates[0],
+                max_value=dates[-1]
+            )
+        
+        if overview_start <= overview_end:
+            if chart_type == "Continuous Time Series (Hourly)":
+                daily_chart = create_daily_rides_continuous_plot(
+                    combined, 
+                    overview_start, 
+                    overview_end, 
+                    max_stations=st.session_state.max_stations_simple_viz
+                )
+            else:
+                daily_chart = create_daily_rides_bar_chart(
+                    combined, 
+                    overview_start, 
+                    overview_end, 
+                    max_stations=st.session_state.max_stations_simple_viz
+                )
+            st.plotly_chart(daily_chart, use_container_width=True)
+        else:
+            st.error("Start date must be before or equal to end date")
 
-        # Spider Plot for the entire month (moved to end)
-        st.subheader(f"Monthly Station Analysis - {sel_date.strftime('%B %Y')}")
+        # 3. DAILY TIME-SERIES CLUSTERING
+        st.header("🔄 Daily Time Series Clustering")
+        render_daily_time_series_section(combined, st.session_state)
 
-        # Create tabs for different spider plots
-        spider_tab1, spider_tab2 = st.tabs(["📊 Multi-Metric Analysis", "🔄 Arrivals vs Departures"])
+        # 4. SPIDER GLYPH PLOTS
+        st.header("🕸️ Advanced Spider Glyph Visualizations")
+
+        # Create tabs for different spider glyph approaches
+        spider_tab1, spider_tab2 = st.tabs([
+            "🔄 Improved Spider Glyphs", 
+            "📊 Reorganized Plots"
+        ])
 
         with spider_tab1:
+            st.markdown("### 🎯 Improved Spider Glyph Analysis")
+            st.markdown("""
+            **Better spider glyphs designed specifically for bike share insights:**
+            - **Temporal Patterns**: Rush hour intensity, weekend vs weekday patterns
+            - **Station Roles**: Departure hubs, arrival destinations, balanced stations
+            """)
+            
+            # Temporal Pattern Spider
+            st.subheader("⏰ Temporal Usage Patterns")
+            with st.expander("ℹ️ How to read temporal patterns", expanded=False):
+                st.markdown("""
+                **🕷️ This spider shows station usage patterns grouped by activity level:**
+                - **Rush Hour Intensity**: How much stations favor departure vs arrival times
+                - **Midday Activity**: Overall activity during non-peak hours
+                - **Weekend vs Weekday**: Ratio showing leisure vs commuter usage
+                - **Night Activity**: Base level activity during low-demand periods
+                - **Seasonal Variation**: How much patterns change across months
+                
+                **🎨 Colors represent station activity levels:**
+                - **🔴 Red**: High-activity stations (busy hubs)
+                - **🟠 Orange**: Medium-activity stations (neighborhood stations)
+                - **🔵 Blue**: Low-activity stations (peripheral locations)
+                """)
+            
             try:
-                fig_spider = create_spider_plot_for_month(combined, sel_date)
-                if fig_spider.data:
-                    # Add help icon with hover tooltip
-                    col1, col2 = st.columns([1, 20])
-                    with col1:
-                        st.markdown("ℹ️", help="""
-        **Each station is represented by a spider-like visualization showing 8 key metrics:**
-
-        **📊 Spider Arms (longer = higher value):**
-        - **Avg Net Balance**: Overall demand pattern
-        - **Volatility**: Day-to-day variation  
-        - **Range**: Spread between max/min values
-        - **Trend Slope**: Rate of change over time
-        - **Peak Value**: Maximum daily demand
-        - **Valley Value**: Maximum daily deficit
-        - **Weekday-Weekend Diff**: Usage pattern difference
-        - **Consistency**: Predictability measure (longer = more predictable)
-
-        **🎨 Colors:**
-        - **🔴 Red**: Stations with more departures (net positive)
-        - **🟢 Green**: Stations with more arrivals (net negative) 
-        - **🔵 Blue**: Balanced stations (near zero net)
-                                """)
-
-                    st.plotly_chart(fig_spider, use_container_width=True)
+                temporal_spider = create_temporal_pattern_spider(combined, max_stations=st.session_state.max_stations_complex_viz)
+                if temporal_spider.data:
+                    st.plotly_chart(temporal_spider, use_container_width=True)
                 else:
-                    st.info("No data available for spider plot in this month.")
+                    st.info("No data available for temporal pattern analysis.")
             except Exception as e:
-                st.error(f"Error creating spider plot: {e}")
+                st.error(f"Error creating temporal pattern spider: {e}")
+            
+            # Station Role Spider
+            st.subheader("🎭 Station Role Analysis")
+            with st.expander("ℹ️ How to read station roles", expanded=False):
+                st.markdown("""
+                **📊 This spider identifies different station roles in the bike share system:**
+                - **Departure Hub Score**: 0 = arrival destination, 1 = departure hub
+                - **Peak Hour Dominance**: How much activity concentrates in rush hours
+                - **Consistency Score**: How predictable daily patterns are
+                - **Volume Level**: Overall traffic level compared to other stations
+                - **Balance Score**: How well-balanced arrivals and departures are
+                
+                **🔍 Use this to identify:**
+                - **Departure Hubs**: Residential areas, transit stations
+                - **Arrival Destinations**: Business districts, tourist areas
+                - **Balanced Stations**: Mixed-use areas, transfer points
+                """)
+            
+            try:
+                role_spider = create_station_role_spider(combined, max_stations=10)
+                if role_spider.data:
+                    st.plotly_chart(role_spider, use_container_width=True)
+                else:
+                    st.info("No data available for station role analysis.")
+            except Exception as e:
+                st.error(f"Error creating station role spider: {e}")
 
         with spider_tab2:
-            try:
-                fig_arrivals_departures = create_arrivals_departures_spider_plot(combined, sel_date)
-                if fig_arrivals_departures.data:
-                    # Add help icon with hover tooltip
-                    col1, col2 = st.columns([1, 20])
-                    with col1:
-                        st.markdown("ℹ️", help="""
-        **Arrivals vs Departures Spider Plot:**
+            st.markdown("### 📊 Spider Glyph Visualizations")
+            
+            # Y-axis selection
+            y_axis_option = st.selectbox(
+                "Choose Y-axis for Spider Glyph:",
+                ["Month", "Distance from Manhattan", "Balance Ratio", "Activity Density", "Time Wheel"],
+                help="Different Y-axis options provide different insights into station characteristics"
+            )
+            
+            if y_axis_option == "Month":
+                st.subheader("📅 Spider Glyph by Month")
+                try:
+                    spider_fig = create_spider_glyph_month(combined)
+                    st.plotly_chart(spider_fig, use_container_width=True)
+                    st.info("Y-axis shows normalized month mapping with improved scaling for better readability")
+                except Exception as e:
+                    st.error(f"Error creating month spider glyph: {e}")
+                
+            elif y_axis_option == "Distance from Manhattan":
+                st.subheader("📍 Spider Glyph by Distance from Manhattan")
+                try:
+                    spider_fig = create_spider_glyph_distance(combined)
+                    st.plotly_chart(spider_fig, use_container_width=True)
+                    st.info("Y-axis shows distance in kilometers from Manhattan center (Times Square)")
+                except Exception as e:
+                    st.error(f"Error creating distance spider glyph: {e}")
+                
+            elif y_axis_option == "Balance Ratio":
+                st.subheader("⚖️ Spider Glyph by Balance Ratio")
+                try:
+                    spider_fig = create_spider_glyph_balance_ratio(combined)
+                    st.plotly_chart(spider_fig, use_container_width=True)
+                    st.info("Y-axis shows departure/arrival balance ratio. Values >1 indicate more departures than arrivals")
+                except Exception as e:
+                    st.error(f"Error creating balance ratio spider glyph: {e}")
+                
+            elif y_axis_option == "Activity Density":
+                st.subheader("🚀 Spider Glyph by Activity Density")
+                try:
+                    spider_fig = create_spider_glyph_activity_density(combined)
+                    st.plotly_chart(spider_fig, use_container_width=True)
+                    st.info("Y-axis shows average rides per day, indicating how busy each station is")
+                except Exception as e:
+                    st.error(f"Error creating activity density spider glyph: {e}")
+                    
+            elif y_axis_option == "Time Wheel":
+                st.subheader("🕐 Time Wheel Visualization")
+                try:
+                    time_wheel_fig = create_time_wheel_plot(combined)
+                    st.plotly_chart(time_wheel_fig, use_container_width=True)
+                    st.info("Polar plot showing activity patterns by hour (angle) and day of week (radius). Each point represents activity level at that time.")
+                    with st.expander("ℹ️ How to read the Time Wheel", expanded=False):
+                        st.markdown("""
+                        **🕐 Time Wheel Interpretation:**
+                        - **Angle (Clock Position)**: Hour of day (12 o'clock = midnight, 3 o'clock = 6am, etc.)
+                        - **Distance from Center**: Day of week (inner = Monday, outer = Sunday)
+                        - **Point Size**: Relative activity level at that hour/day combination
+                        - **Colors**: Different days of the week for easy identification
+                        
+                        **🔍 Patterns to Look For:**
+                        - **Rush Hour Spikes**: Large points during morning (7-9am) and evening (5-7pm)
+                        - **Weekend Differences**: Different patterns on Saturday/Sunday (outer rings)
+                        - **Night Activity**: Smaller points during late night hours (10pm-5am)
+                        """)
+                except Exception as e:
+                    st.error(f"Error creating time wheel plot: {e}")
 
-        **📊 Spider Arms:**
-        - **Thin Line**: Arrivals (longer = more arrivals)
-        - **Thick Line**: Departures (longer = more departures)
-
-        **🎨 Colors:**
-        - **🔴 Red**: More departures than arrivals
-        - **🟢 Green**: More arrivals than departures
-        - **🔵 Blue**: Balanced arrivals and departures
-
-        **📈 Interpretation:**
-        - Stations with longer thick lines are departure hubs
-        - Stations with longer thin lines are arrival destinations
-        - The angle between lines shows the balance ratio
-                                """)
-
-                    st.plotly_chart(fig_arrivals_departures, use_container_width=True)
-                else:
-                    st.info("No data available for arrivals/departures spider plot in this month.")
-            except Exception as e:
-                st.error(f"Error creating arrivals/departures spider plot: {e}")
     elif mode == "Timeline Map":
-        # Timeline mode
-        render_timeline_mode(combined, dates)
-
-    else:  # Models Map
-        # Models mode
-        render_models_map_mode(combined, dates)
+        render_timeline_mode(combined, dates, st.session_state)
+    
+    elif mode == "Models Map":
+        render_models_map_mode(combined, dates, st.session_state)
 
 
-def render_daily_time_series_section(combined):
+def render_daily_time_series_section(combined, session_state):
     """Render the daily time series clustering section"""
     st.subheader("Daily Time Series Clustering")
 
@@ -186,7 +401,7 @@ def render_daily_time_series_section(combined):
         ts_k = st.selectbox("Clusters:", list(range(1, 7)), index=2, key="ts_k")
 
     # Prepare daily time series data for selected month
-    pivot_daily, coords, day_info = prepare_daily_time_series_data(combined, selected_month)
+    pivot_daily, coords, day_info = prepare_daily_time_series_data(combined, selected_month, max_stations=session_state.max_stations_complex_viz)
 
     if not pivot_daily.empty and day_info:
         # Display the selected month info
@@ -201,13 +416,13 @@ def render_daily_time_series_section(combined):
         st.plotly_chart(create_time_series_cluster_map(ts_res), use_container_width=True)
 
         # Show cluster characteristics
-        render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, selected_month_str)
+        render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, selected_month_str, combined)
 
     else:
         st.warning(f"No data available for {month_options.get(selected_month_str, 'selected month')}.")
 
 
-def render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, selected_month_str):
+def render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, selected_month_str, combined):
     """Render detailed cluster analysis section"""
 
     if not ts_res.empty and len(pivot_daily.columns) > 0:
@@ -221,29 +436,15 @@ def render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, select
         # Calculate average patterns for each cluster
         for cluster_id in sorted(ts_res['cluster'].unique()):
             cluster_stations = ts_res[ts_res['cluster'] == cluster_id]['station_name'].tolist()
-            cluster_series = pivot_daily.loc[pivot_daily.index.isin(cluster_stations)]
-
-            if not cluster_series.empty:
-                avg_pattern = cluster_series.mean(axis=0).values
-
-                # Calculate trend line using linear regression
-                x_values = np.arange(len(avg_pattern)).reshape(-1, 1)
-                lr = LinearRegression()
-                lr.fit(x_values, avg_pattern)
-                trend_line = lr.predict(x_values)
-                trend_slope = lr.coef_[0]
-
+            cluster_station_data = pivot_daily.loc[cluster_stations]
+            
+            if not cluster_station_data.empty:
+                avg_pattern = cluster_station_data.mean(axis=0).values
                 cluster_data.append({
                     'cluster': cluster_id,
                     'stations': len(cluster_stations),
                     'pattern': avg_pattern,
-                    'trend_line': trend_line,
-                    'trend_slope': trend_slope,
-                    'max_value': avg_pattern.max(),
-                    'min_value': avg_pattern.min(),
-                    'volatility': avg_pattern.std(),
-                    'trend': 'Increasing' if trend_slope > 0 else 'Decreasing',
-                    'all_station_data': cluster_series.values
+                    'all_station_data': cluster_station_data.values
                 })
 
         # 1. Cluster Data Distribution - Combined Whisker Plot
@@ -252,11 +453,8 @@ def render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, select
         # 2. Daily Patterns with Trend Lines (Z-Score only)
         render_daily_patterns_plot(cluster_data, day_labels, month_options, selected_month_str, colors)
 
-        # 3. Cluster Statistics and Insights (centered) - MODIFIED
+        # 3. Cluster Statistics and Insights (centered)
         render_cluster_statistics(cluster_data)
-
-        # 4. Model Enhancement Suggestions
-        render_model_suggestions()
 
     else:
         # Show basic cluster summary if no time series data
@@ -283,6 +481,7 @@ def render_cluster_distribution_plot(cluster_data, month_options, selected_month
         ))
 
     fig_whisker.update_layout(
+        title=f"Cluster Data Distribution - {month_options[selected_month_str]}",
         yaxis_title="Net Balance",
         xaxis_title="Cluster",
         height=400,
@@ -314,17 +513,16 @@ def render_daily_patterns_plot(cluster_data, day_labels, month_options, selected
         if np.std(original_pattern) > 0:
             normalized_pattern = (original_pattern - np.mean(original_pattern)) / np.std(original_pattern)
         else:
-            normalized_pattern = original_pattern - np.mean(original_pattern)
+            normalized_pattern = np.zeros_like(original_pattern)
 
         # Calculate trend line on normalized data
         x_values = np.arange(len(normalized_pattern))
         if len(x_values) > 1:
-            trend_slope = np.polyfit(x_values, normalized_pattern, 1)[0]
-            trend_line = np.polyval(
-                [trend_slope, np.mean(normalized_pattern) - trend_slope * np.mean(x_values)], x_values)
+            trend_slope, trend_intercept = np.polyfit(x_values, normalized_pattern, 1)
+            trend_line = trend_slope * x_values + trend_intercept
         else:
-            trend_line = normalized_pattern
             trend_slope = 0
+            trend_line = normalized_pattern
 
         # Add actual pattern line
         fig_patterns.add_trace(go.Scatter(
@@ -361,7 +559,7 @@ def render_daily_patterns_plot(cluster_data, day_labels, month_options, selected
 
 
 def render_cluster_statistics(cluster_data):
-    """Render cluster statistics and insights - MODIFIED to remove trend and behavior"""
+    """Render cluster statistics and insights"""
     # Center the statistics table
     col1, col2, col3 = st.columns([1, 2, 1])
 
@@ -369,93 +567,46 @@ def render_cluster_statistics(cluster_data):
         # Cluster summary statistics
         summary_data = []
         for cluster_info in cluster_data:
+            avg_pattern = cluster_info['pattern']
             summary_data.append({
                 'Cluster': cluster_info['cluster'],
                 'Stations': cluster_info['stations'],
-                'Max': f"{cluster_info['max_value']:.0f}",
-                'Min': f"{cluster_info['min_value']:.0f}",
-                'Volatility': f"{cluster_info['volatility']:.0f}",
-                'Trend Slope': f"{cluster_info['trend_slope']:.1f}"
+                'Avg Net Balance': f"{np.mean(avg_pattern):.1f}",
+                'Volatility (Std)': f"{np.std(avg_pattern):.1f}",
+                'Max Daily': f"{np.max(avg_pattern):.1f}",
+                'Min Daily': f"{np.min(avg_pattern):.1f}"
             })
 
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, use_container_width=True)
 
-    # Simplified Cluster Insights - REMOVED trend and behavior descriptions
+    # Cluster insights
     insights_cols = st.columns(len(cluster_data))
     for i, cluster_info in enumerate(cluster_data):
         with insights_cols[i]:
-            st.markdown(f"**Cluster {cluster_info['cluster']}**")
-            st.metric("Stations", cluster_info['stations'])
-            st.metric("Peak Balance", f"{cluster_info['max_value']:.0f}")
-            st.metric("Trend Slope", f"{cluster_info['trend_slope']:.1f}")
+            avg_pattern = cluster_info['pattern']
+            avg_net = np.mean(avg_pattern)
+            volatility = np.std(avg_pattern)
+            
+            if avg_net > 10:
+                pattern_type = "🔴 Departure Hub"
+            elif avg_net < -10:
+                pattern_type = "🟢 Arrival Hub"
+            else:
+                pattern_type = "🔵 Balanced"
+            
+            stability = "📈 Volatile" if volatility > 50 else "📊 Stable"
+            
+            st.metric(
+                label=f"Cluster {cluster_info['cluster']}",
+                value=f"{cluster_info['stations']} stations",
+                delta=f"{avg_net:.1f} avg balance"
+            )
+            st.write(f"**{pattern_type}**")
+            st.write(f"**{stability}**")
 
 
-def render_model_suggestions():
-    """Render model enhancement suggestions"""
-    st.markdown("### 🔬 Additional Analysis Models")
-
-    with st.expander("📊 **Enhanced Spider Glyph Plot - Additional Data Suggestions**"):
-        st.markdown("""
-        **🎯 Current Spider Glyph Dimensions:**
-        - Avg Net Balance, Volatility, Range, Trend Slope, Peak/Valley Values, Weekday-Weekend Diff, Consistency
-
-        **📈 Additional Data to Enhance Spider Glyph:**
-
-        **Temporal Patterns:**
-        - **Peak Hour Intensity**: Concentration of activity in rush hours
-        - **Seasonality Score**: How much the pattern varies by season
-        - **Consistency Index**: How predictable the daily pattern is
-
-        **Spatial Context:**
-        - **Distance to City Center**: Proximity to Manhattan core
-        - **Neighborhood Density**: Population/business density around station
-        - **Transit Connectivity**: Number of nearby subway/bus stops
-        - **Land Use Type**: Residential vs Commercial vs Mixed ratio
-
-        **Operational Metrics:**
-        - **Capacity Utilization**: How often stations are full/empty
-        - **Turnover Rate**: How quickly bikes are picked up after arrival
-        - **Weather Sensitivity**: How much weather affects this cluster
-
-        **User Behavior:**
-        - **Trip Duration Patterns**: Average trip length from these stations
-        - **User Type Mix**: Tourist vs Subscriber ratio
-        - **Return Rate**: How often bikes return to same station
-        """)
-
-    with st.expander("🤖 Machine Learning Models You Could Add"):
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("""
-            **📈 Forecasting Models:**
-            - **ARIMA/SARIMA**: Predict future net balance patterns
-            - **LSTM Neural Networks**: Deep learning for sequence prediction
-            - **Vector Autoregression (VAR)**: Multi-station forecasting
-
-            **🏷️ Classification Models:**
-            - **Station Type Classification**: Classify stations (residential, business, tourist)
-            - **Peak/Off-Peak Prediction**: Predict high-demand periods
-            - **Weather Impact Analysis**: How weather affects each cluster
-            """)
-
-        with col2:
-            st.markdown("""
-            **🔍 Pattern Discovery:**
-            - **Anomaly Detection**: Identify unusual station behavior
-            - **Seasonal Decomposition**: Separate trend, seasonal, residual components
-            - **Dynamic Time Warping**: Find similar pattern shapes
-            - **Change Point Detection**: Identify when behavior patterns change
-
-            **🗺️ Spatial Models:**
-            - **Spatial Autocorrelation**: How nearby stations influence each other
-            - **Geographically Weighted Regression**: Location-based modeling
-            - **Network Analysis**: Station-to-station flow optimization
-            """)
-
-
-def render_timeline_mode(combined, dates):
+def render_timeline_mode(combined, dates, session_state):
     """Render the timeline mode interface"""
     # Timeline mode controls
     st.sidebar.header("Timeline Options")
@@ -484,7 +635,7 @@ def render_timeline_mode(combined, dates):
     # 1) Animated Timeline Map
     st.subheader(f"Timeline Map — {start_date.strftime('%d/%m/%y')} to {end_date.strftime('%d/%m/%y')}")
     try:
-        fig_timeline = create_timeline_map(combined, start_date, end_date, radius_m, categories)
+        fig_timeline = create_timeline_map(combined, start_date, end_date, radius_m, categories, max_stations=session_state.max_stations_simple_viz)
         st.plotly_chart(fig_timeline, use_container_width=True, key="timeline_map")
     except Exception as e:
         st.error(f"Error creating timeline map: {e}")
@@ -492,13 +643,13 @@ def render_timeline_mode(combined, dates):
     # 2) Daily Rides Bar Chart
     st.subheader("Daily Ride Counts")
     try:
-        fig_daily_rides = create_daily_rides_bar_chart(combined, start_date, end_date)
+        fig_daily_rides = create_daily_rides_bar_chart(combined, start_date, end_date, max_stations=session_state.max_stations_simple_viz)
         st.plotly_chart(fig_daily_rides, use_container_width=True, key="daily_rides_chart")
     except Exception as e:
         st.error(f"Error creating daily rides chart: {e}")
 
 
-def render_models_map_mode(combined, dates):
+def render_models_map_mode(combined, dates, session_state):
     """Render the advanced models map interface - showing all models together"""
     st.subheader("Advanced Analytics Models")
 
@@ -545,12 +696,11 @@ def render_models_map_mode(combined, dates):
                 mode='markers',
                 marker=dict(
                     size=12,
-                    color='rgba(220, 20, 60, 0.9)',  # Crimson red with slight transparency
-                    opacity=1.0,
-                    symbol='circle'
+                    color='red',
+                    opacity=1.0
                 ),
                 text=selected_coords['station_name'],
-                hovertemplate="<b>%{text}</b><br>🎯 Selected Station<extra></extra>",
+                hovertemplate="<b>%{text}</b><br>Selected Station<extra></extra>",
                 name="Selected Station",
                 showlegend=False
             ))
@@ -578,9 +728,8 @@ def render_models_map_mode(combined, dates):
     if map_click and map_click.get('selection') and map_click['selection'].get('points'):
         clicked_points = map_click['selection']['points']
         if clicked_points:
-            # Get the clicked station name
             clicked_station = clicked_points[0].get('customdata')
-            if clicked_station and clicked_station in available_stations:
+            if clicked_station and clicked_station != st.session_state.selected_station_models:
                 st.session_state.selected_station_models = clicked_station
                 st.rerun()
 
@@ -600,7 +749,6 @@ def render_models_map_mode(combined, dates):
         # Update session state if dropdown changes
         if selected_station_dropdown != st.session_state.selected_station_models:
             st.session_state.selected_station_models = selected_station_dropdown
-            st.rerun()
 
     with col2:
         # Show selected station info with better styling
@@ -610,7 +758,7 @@ def render_models_map_mode(combined, dates):
         # Show station coordinates
         if st.session_state.selected_station_models in station_coords['station_name'].values:
             coords = station_coords[station_coords['station_name'] == st.session_state.selected_station_models].iloc[0]
-            st.caption(f"📍 Coordinates: {coords['lat']:.4f}, {coords['lng']:.4f}")
+            st.caption(f"📍 {coords['lat']:.4f}, {coords['lng']:.4f}")
 
     # Improved usage instructions
     st.info(
@@ -625,13 +773,6 @@ def render_models_map_mode(combined, dates):
 
     # Date settings for different analyses
     analysis_date = st.sidebar.date_input("Analysis Date:", value=dates[0], min_value=dates[0], max_value=dates[-1])
-
-    # Weather analysis date range
-    st.sidebar.subheader("Weather Analysis Range")
-    weather_start_date = st.sidebar.date_input("Start Date:", value=dates[0], min_value=dates[0], max_value=dates[-1],
-                                               key="weather_start")
-    weather_end_date = st.sidebar.date_input("End Date:", value=min(dates[-1], dates[0] + pd.Timedelta(days=30)),
-                                             min_value=dates[0], max_value=dates[-1], key="weather_end")
 
     # Anomaly detection settings
     z_threshold = st.sidebar.slider("Z-Score Threshold (Anomaly Detection):", 1.5, 4.0, 2.5, 0.1)
@@ -650,52 +791,145 @@ def render_models_map_mode(combined, dates):
 
     with st.spinner("Running ARIMA model..."):
         try:
-            fig, message = create_arima_forecast(combined, selected_station, forecast_days_arima)
-            if fig.data:
-                st.plotly_chart(fig, use_container_width=True)
-                st.success(message)
-            else:
-                st.error(message)
+            fig_arima, message_arima = create_arima_forecast(combined, selected_station, forecast_days_arima)
+            st.plotly_chart(fig_arima, use_container_width=True)
+            st.info(message_arima)
         except Exception as e:
-            st.error(f"ARIMA forecast error: {e}")
+            st.error(f"Error in ARIMA forecast: {e}")
 
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════════════════
-    # 2. PEAK/OFF-PEAK PREDICTION
+    # 2. PROPHET FORECAST
     # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader(f"⏰ Peak/Off-Peak Analysis - {analysis_date.strftime('%d/%m/%y')}")
+    st.subheader("📈 Prophet Forecast")
 
-    with st.spinner("Analyzing peak periods..."):
+    # Forecast days control moved to main area
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        forecast_days_prophet = st.slider("Forecast Days:", 3, 14, 7, key="prophet_days")
+    with col2:
+        st.write(f"**Station:** {selected_station}")
+
+    with st.spinner("Running Prophet model..."):
         try:
-            fig = predict_peak_periods(combined, analysis_date)
-            if fig.data:
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Show statistics
-                df_day = combined[combined['date'] == analysis_date]
-                if not df_day.empty:
-                    df_day['total_activity'] = df_day['departures'] + df_day['arrivals']
-                    peak_threshold = df_day['total_activity'].quantile(0.75)
-                    peak_stations = len(df_day[df_day['total_activity'] >= peak_threshold])
-                    total_stations = len(df_day)
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Stations", total_stations)
-                    with col2:
-                        st.metric("Peak Stations", peak_stations)
-                    with col3:
-                        st.metric("Peak Threshold", f"{peak_threshold:.0f} rides")
-            else:
-                st.warning("No data available for peak analysis")
+            fig_prophet, message_prophet = create_prophet_forecast(combined, selected_station, forecast_days_prophet)
+            st.plotly_chart(fig_prophet, use_container_width=True)
+            st.info(message_prophet)
         except Exception as e:
-            st.error(f"Peak analysis error: {e}")
+            st.error(f"Error in Prophet forecast: {e}")
 
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════════════════
-    # 3. ANOMALY DETECTION
+    # 3. PEAK/OFF-PEAK PREDICTION
+    # ═══════════════════════════════════════════════════════════════════════════════
+    st.subheader("⏰ Peak/Off-Peak Analysis with Continuous Intensity")
+    
+    # Enhanced date selection for peak analysis
+    st.markdown("**📅 Select Analysis Period:**")
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        analysis_mode = st.radio(
+            "Analysis Mode:",
+            ["Single Day", "Date Range", "All Time"],
+            help="Choose the time period for peak analysis"
+        )
+    
+    with col2:
+        if analysis_mode == "Single Day":
+            peak_start_date = st.date_input(
+                "Analysis Date:",
+                value=analysis_date,
+                min_value=dates[0],
+                max_value=dates[-1],
+                key="peak_single_date"
+            )
+            peak_end_date = None
+            
+        elif analysis_mode == "Date Range":
+            peak_start_date = st.date_input(
+                "Start Date:",
+                value=analysis_date,
+                min_value=dates[0],
+                max_value=dates[-1],
+                key="peak_start_date"
+            )
+            
+        else:  # All Time
+            peak_start_date = dates[0]
+            peak_end_date = dates[-1]
+    
+    with col3:
+        if analysis_mode == "Date Range":
+            # Calculate max end date (up to 1 month from start)
+            max_end_date = min(
+                peak_start_date + datetime.timedelta(days=31),
+                dates[-1]
+            )
+            peak_end_date = st.date_input(
+                "End Date:",
+                value=min(
+                    peak_start_date + datetime.timedelta(days=7),
+                    max_end_date
+                ),
+                min_value=peak_start_date,
+                max_value=max_end_date,
+                key="peak_end_date"
+            )
+        else:
+            st.write("")  # Empty placeholder
+
+    # Analysis information
+    if analysis_mode == "Single Day":
+        st.info(f"🔍 Analyzing peak patterns for {peak_start_date.strftime('%B %d, %Y')}")
+    elif analysis_mode == "Date Range":
+        days_diff = (peak_end_date - peak_start_date).days + 1
+        st.info(f"🔍 Analyzing peak patterns over {days_diff} days ({peak_start_date.strftime('%b %d')} - {peak_end_date.strftime('%b %d, %Y')})")
+    else:
+        st.info(f"🔍 Analyzing peak patterns across all available data ({dates[0].strftime('%b %d, %Y')} - {dates[-1].strftime('%b %d, %Y')})")
+
+    with st.spinner("Analyzing peak periods with continuous intensity mapping..."):
+        try:
+            use_all_time = (analysis_mode == "All Time")
+            fig_peak = predict_peak_periods_standalone(
+                combined, 
+                peak_start_date, 
+                peak_end_date, 
+                use_all_time
+            )
+            st.plotly_chart(fig_peak, use_container_width=True)
+            
+            # Add explanation
+            with st.expander("ℹ️ How to read the Peak Analysis", expanded=False):
+                st.markdown("""
+                **🌡️ Continuous Color Mapping:**
+                - **🔵 Cold Blue**: Off-peak stations with low activity
+                - **🟡 Yellow**: Medium activity stations
+                - **🔴 Hot Red**: Peak stations with high activity
+                - **Marker Size**: Proportional to activity level
+                
+                **📊 Peak Intensity Score:**
+                - Calculated as normalized activity level (0-100%)
+                - Takes into account the selected time period
+                - For date ranges: Uses average daily activity
+                - For single days: Uses total daily activity
+                
+                **🎯 Use Cases:**
+                - **Single Day**: Identify daily peak patterns
+                - **Date Range**: Find consistently busy stations
+                - **All Time**: Discover overall system hotspots
+                """)
+                
+        except Exception as e:
+            st.error(f"Error in peak period analysis: {e}")
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # 4. ANOMALY DETECTION
     # ═══════════════════════════════════════════════════════════════════════════════
     st.subheader(f"🚨 Monthly Anomaly Detection - {analysis_date.strftime('%B %Y')}")
 
@@ -704,45 +938,11 @@ def render_models_map_mode(combined, dates):
 
     with st.spinner("Detecting anomalies..."):
         try:
-            fig, message = detect_station_anomalies(combined, analysis_date, z_threshold)
-
-            if fig.data:
-                st.plotly_chart(fig, use_container_width=True)
-                st.info(message)
-
-                # Show threshold info
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Z-Score Threshold", f"{z_threshold}")
-                with col2:
-                    st.metric("Sensitivity", "Higher" if z_threshold < 2.5 else "Lower")
-            else:
-                st.warning("No data available for anomaly detection")
+            fig_anomaly, message_anomaly = detect_station_anomalies(combined, analysis_date, z_threshold)
+            st.plotly_chart(fig_anomaly, use_container_width=True)
+            st.info(message_anomaly)
         except Exception as e:
-            st.error(f"Anomaly detection error: {e}")
-
-    # ═══════════════════════════════════════════════════════════════════════════════
-    # 4. WEATHER IMPACT ANALYSIS
-    # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader("🌤️ Weather Impact Analysis")
-
-    st.write(f"**Date Range:** {weather_start_date.strftime('%d/%m/%y')} - {weather_end_date.strftime('%d/%m/%y')}")
-
-    if weather_start_date > weather_end_date:
-        st.error("Start date must be before end date.")
-    else:
-        with st.spinner("Loading weather data and analyzing impact..."):
-            try:
-                weather_data = load_weather(weather_start_date, weather_end_date)
-                fig, message = create_weather_impact_analysis(combined, weather_data)
-
-                if fig.data:
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.success(message)
-                else:
-                    st.error(message)
-            except Exception as e:
-                st.error(f"Weather analysis error: {e}")
+            st.error(f"Error in anomaly detection: {e}")
 
 
 if __name__ == "__main__":
