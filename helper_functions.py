@@ -1468,174 +1468,261 @@ def create_spider_glyph_month(combined):
         return go.Figure()
 
 
-def create_time_wheel_plot(combined):
-    """Create a time wheel plot showing activity patterns throughout the day and week"""
+def create_time_wheel_plot(combined, selected_week=None):
+    """Create a comprehensive cyclic time wheel with connecting lines and week selector"""
     try:
         import plotly.graph_objects as go
         import pandas as pd
         import numpy as np
         from math import pi, cos, sin
 
+        if combined is None or combined.empty:
+            return go.Figure().add_annotation(
+                text="No data available for time wheel visualization",
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=16)
+            )
+
+        # Prepare data
         df_temp = combined.copy()
         
-        # Limit to top stations for performance
-        if len(df_temp['station_name'].unique()) > 100:
-            top_stations = df_temp.groupby('station_name')['departures'].sum().nlargest(100).index
+        # Limit stations for performance
+        if len(df_temp['station_name'].unique()) > 80:
+            top_stations = df_temp.groupby('station_name')['departures'].sum().nlargest(80).index
             df_temp = df_temp[df_temp['station_name'].isin(top_stations)]
             
         df_temp['date'] = pd.to_datetime(df_temp['date'])
+        df_temp['day_of_week'] = df_temp['date'].dt.dayofweek  # 0=Monday, 6=Sunday
+        df_temp['week'] = df_temp['date'].dt.isocalendar().week
         df_temp['total_rides'] = df_temp['departures'] + df_temp['arrivals']
+        df_temp['net_balance'] = df_temp['departures'] - df_temp['arrivals']
         
-        # Simulate hourly data based on typical bike share patterns
+        # Filter by selected week if provided
+        if selected_week is not None:
+            df_temp = df_temp[df_temp['week'] == selected_week]
+            if df_temp.empty:
+                return go.Figure().add_annotation(
+                    text=f"No data available for week {selected_week}",
+                    xref="paper", yref="paper", x=0.5, y=0.5,
+                    showarrow=False, font=dict(size=16)
+                )
+
+        # Generate realistic hourly patterns based on actual bike share behavior
         np.random.seed(42)
-        hourly_data = []
+        hourly_expanded_data = []
         
         for _, row in df_temp.iterrows():
-            # Create realistic hourly distribution
-            base_pattern = np.array([
-                0.02, 0.01, 0.01, 0.01, 0.02, 0.05,  # 0-5: Night/Early morning
-                0.08, 0.12, 0.15, 0.10, 0.08, 0.07,  # 6-11: Morning rush/mid-morning
-                0.06, 0.05, 0.04, 0.04, 0.05, 0.08,  # 12-17: Lunch/afternoon
-                0.12, 0.10, 0.08, 0.06, 0.04, 0.03   # 18-23: Evening rush/night
-            ])
+            total_daily_rides = row['total_rides']
             
-            # Add day-of-week variation
-            dow = row['date'].dayofweek
-            if dow >= 5:  # Weekend
-                # Smoother pattern for weekends
-                base_pattern = np.array([
-                    0.03, 0.02, 0.02, 0.02, 0.03, 0.04,  # 0-5: Night
-                    0.06, 0.08, 0.10, 0.12, 0.12, 0.11,  # 6-11: Late morning
-                    0.10, 0.09, 0.08, 0.07, 0.07, 0.08,  # 12-17: Afternoon
-                    0.09, 0.08, 0.07, 0.06, 0.05, 0.04   # 18-23: Evening
+            # Create realistic hourly distribution patterns
+            if row['day_of_week'] < 5:  # Weekdays
+                hourly_pattern = np.array([
+                    0.005, 0.002, 0.001, 0.001, 0.003, 0.015,  # 0-5: Night/early morning
+                    0.045, 0.085, 0.120, 0.075, 0.055, 0.048,  # 6-11: Morning rush & mid-morning
+                    0.052, 0.048, 0.042, 0.045, 0.058, 0.095,  # 12-17: Afternoon
+                    0.135, 0.085, 0.065, 0.045, 0.025, 0.012   # 18-23: Evening rush & night
+                ])
+            else:  # Weekends
+                hourly_pattern = np.array([
+                    0.008, 0.003, 0.002, 0.002, 0.005, 0.012,  # 0-5: Night/early morning
+                    0.025, 0.045, 0.065, 0.085, 0.095, 0.105,  # 6-11: Gradual morning increase
+                    0.110, 0.095, 0.085, 0.075, 0.070, 0.075,  # 12-17: Steady afternoon
+                    0.085, 0.070, 0.055, 0.040, 0.025, 0.015   # 18-23: Evening decline
                 ])
             
-            # Normalize to sum to 1
-            base_pattern = base_pattern / base_pattern.sum()
+            # Normalize pattern to sum to 1
+            hourly_pattern = hourly_pattern / hourly_pattern.sum()
             
-            # Distribute total rides across hours
+            # Generate hourly ride counts
             for hour in range(24):
-                rides_this_hour = int(row['total_rides'] * base_pattern[hour])
-                if rides_this_hour > 0:
-                    hourly_data.append({
+                hour_rides = int(total_daily_rides * hourly_pattern[hour])
+                if hour_rides > 0:  # Only include hours with activity
+                    hourly_expanded_data.append({
                         'station_name': row['station_name'],
                         'date': row['date'],
                         'hour': hour,
-                        'day_of_week': dow,
-                        'rides': rides_this_hour,
-                        'lat': row['lat'],
-                        'lng': row['lng']
+                        'day_of_week': row['day_of_week'],
+                        'rides_this_hour': hour_rides,
+                        'net_balance_ratio': row['net_balance'] / max(1, total_daily_rides)
                     })
+
+        if not hourly_expanded_data:
+            return go.Figure().add_annotation(
+                text="No hourly data could be generated",
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=16)
+            )
+
+        hourly_df = pd.DataFrame(hourly_expanded_data)
         
-        hourly_df = pd.DataFrame(hourly_data)
-        
-        if hourly_df.empty:
-            return go.Figure().add_annotation(text="No data available for time wheel", 
-                                              xref="paper", yref="paper", x=0.5, y=0.5)
-        
-        # Aggregate by hour and day of week
-        time_agg = hourly_df.groupby(['hour', 'day_of_week'])['rides'].sum().reset_index()
-        
-        # Create polar coordinates for time wheel
-        # Hours: 0-23 mapped to 0-2π
-        # Days of week: radius from center (0=Monday, 6=Sunday)
-        
+        # Aggregate data by hour and day of week
+        time_aggregated = (
+            hourly_df.groupby(['hour', 'day_of_week'])
+            .agg({
+                'rides_this_hour': 'sum',
+                'net_balance_ratio': 'mean'
+            })
+            .reset_index()
+        )
+
+        # Create the polar time wheel plot
         fig = go.Figure()
         
-        # Create time wheel visualization
-        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8']
+        # Define colors for each day of the week
+        day_colors = [
+            '#FF6B6B',  # Monday - Red
+            '#4ECDC4',  # Tuesday - Teal
+            '#45B7D1',  # Wednesday - Blue
+            '#96CEB4',  # Thursday - Green
+            '#FFEAA7',  # Friday - Yellow
+            '#DDA0DD',  # Saturday - Plum
+            '#98D8C8'   # Sunday - Mint
+        ]
+        
         day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+        # Create traces for each day of the week (only bubbles, no lines)
+        for day_idx in range(7):
+            day_data = time_aggregated[time_aggregated['day_of_week'] == day_idx]
+            if day_data.empty:
+                continue
+            day_data = day_data.sort_values('hour')
+            angles = [(hour * 15) - 90 for hour in day_data['hour']]
+            base_radius = 1 + (day_idx * 0.5)
+            max_rides = time_aggregated['rides_this_hour'].max()
+            if max_rides > 0:
+                radius_values = [base_radius + (rides / max_rides) * 1.5 for rides in day_data['rides_this_hour']]
+            else:
+                radius_values = [base_radius] * len(day_data)
+            if max_rides > 0:
+                bubble_sizes = [8 + (rides / max_rides) * 27 for rides in day_data['rides_this_hour']]
+            else:
+                bubble_sizes = [12] * len(day_data)
+            fig.add_trace(go.Scatterpolar(
+                r=radius_values,
+                theta=angles,
+                mode='markers',
+                name=day_names[day_idx],
+                marker=dict(
+                    size=bubble_sizes,
+                    color=day_colors[day_idx],
+                    opacity=0.85,
+                    line=dict(
+                        color='white',
+                        width=2
+                    ),
+                    sizemode='diameter'
+                ),
+                hovertemplate=(
+                    f"<b>{day_names[day_idx]}</b><br>" +
+                    "Hour: %{customdata[0]:02d}:00<br>" +
+                    "Activity Level: %{customdata[1]:.0f} rides<br>" +
+                    "Radius Position: %{r:.1f}<br>" +
+                    "<extra></extra>"
+                ),
+                customdata=list(zip(day_data['hour'], day_data['rides_this_hour']))
+            ))
+
+        # Add concentric reference circles for days (more subtle)
+        circle_theta = list(range(0, 360, 10))  # Every 10 degrees for smoother circles
         
-        for day in range(7):
-            day_data = time_agg[time_agg['day_of_week'] == day]
-            
-            if not day_data.empty:
-                # Convert hours to angles (0-24 hours = 0-360 degrees)
-                angles = [(hour * 360 / 24) for hour in day_data['hour']]
-                
-                # Radius based on day of week (inner to outer rings)
-                radius_base = 1 + day * 0.5  # Each day gets a different radius
-                
-                # Scale rides for radius variation
-                max_rides = time_agg['rides'].max()
-                radius_values = [radius_base + (rides / max_rides) * 0.4 for rides in day_data['rides']]
-                
-                # Add trace for this day
-                fig.add_trace(go.Scatterpolar(
-                    r=radius_values,
-                    theta=angles,
-                    mode='lines+markers',
-                    name=day_names[day],
-                    line=dict(color=colors[day], width=3),
-                    marker=dict(size=6, color=colors[day]),
-                    hovertemplate=f'<b>{day_names[day]}</b><br>' +
-                                  'Hour: %{theta:.0f}<br>' +
-                                  'Rides: %{customdata}<br>' +
-                                  '<extra></extra>',
-                    customdata=day_data['rides']
-                ))
-        
-        # Add concentric circles for days of week
-        for day in range(7):
-            radius = 1 + day * 0.5
-            circle_angles = np.linspace(0, 360, 100)
-            circle_r = [radius] * 100
-            
+        for day_idx in range(7):
+            base_radius = 1 + (day_idx * 0.5)
+            circle_r = [base_radius] * len(circle_theta)
             fig.add_trace(go.Scatterpolar(
                 r=circle_r,
-                theta=circle_angles,
+                theta=circle_theta,
                 mode='lines',
-                line=dict(color='lightgray', width=1, dash='dot'),
+                line=dict(color='lightgray', width=0.5, dash='dot'),
                 showlegend=False,
                 hoverinfo='skip'
             ))
-        
-        # Add hour labels
-        for hour in range(0, 24, 3):  # Every 3 hours
-            angle = hour * 360 / 24
-            fig.add_annotation(
-                text=f'{hour:02d}:00',
-                x=0.5 + 0.4 * cos(angle * pi / 180),
-                y=0.5 + 0.4 * sin(angle * pi / 180),
-                xref='paper',
-                yref='paper',
-                showarrow=False,
-                font=dict(size=10, color='black')
-            )
-        
+
+        # Add hour markers around the wheel
+        hour_labels = []
+        hour_positions = []
+        for hour in range(0, 24, 2):  # Every 2 hours
+            angle = (hour * 15) - 90
+            hour_labels.append(f"{hour:02d}:00")
+            hour_positions.append(angle)
+
         fig.update_layout(
             polar=dict(
                 radialaxis=dict(
-                    title="Activity Level by Day",
+                    title="Activity Level by Day of Week",
                     visible=True,
-                    range=[0, 5],
-                    tickvals=[1, 1.5, 2, 2.5, 3, 3.5, 4],
-                    ticktext=day_names
+                    range=[0, 6],
+                    tickmode='array',
+                    tickvals=[1.25, 1.75, 2.25, 2.75, 3.25, 3.75, 4.25],
+                    ticktext=day_names,
+                    gridcolor='lightgray',
+                    gridwidth=0.5,
+                    showline=True,
+                    linewidth=1,
+                    linecolor='gray'
                 ),
                 angularaxis=dict(
-                    title="Hour of Day",
-                    tickvals=[0, 90, 180, 270],
-                    ticktext=['00:00', '06:00', '12:00', '18:00'],
+                    tickmode='array',
+                    tickvals=hour_positions,
+                    ticktext=hour_labels,
                     direction='clockwise',
-                    rotation=90
+                    rotation=90,
+                    gridcolor='lightgray',
+                    gridwidth=0.5
                 )
             ),
-            title="Time Wheel: Activity Patterns by Day of Week and Hour",
-            height=700,
+            title={
+                'text': f"Cyclic Time Wheel: Activity by Day and Hour",
+                'x': 0.5,
+                'xanchor': 'center',
+                'font': {'size': 20}
+            },
+            height=850,
             showlegend=True,
             legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="center",
-                x=0.5
-            )
+                orientation="v",
+                yanchor="middle",
+                y=0.5,
+                xanchor="left",
+                x=1.05,
+                font=dict(size=16, color='white'),
+                bgcolor='rgba(30,30,30,0.95)',
+                bordercolor='black',
+                borderwidth=2,
+                title=dict(
+                    text="Days of Week",
+                    font=dict(size=16, color='white')
+                )
+            ),
+            margin=dict(l=20, r=180, t=120, b=60),
+            annotations=[
+                dict(
+                    text="📊 Bubble Size = Hourly Activity Level",
+                    xref="paper", yref="paper",
+                    x=0.02, y=0.98,
+                    showarrow=False,
+                    font=dict(size=13, color="white"),
+                    bgcolor="rgba(30,30,30,0.95)",
+                    bordercolor="black",
+                    borderwidth=1
+                ),
+                dict(
+                    text="🕐 Hours flow clockwise from midnight (top)",
+                    xref="paper", yref="paper",
+                    x=0.02, y=0.05,
+                    showarrow=False,
+                    font=dict(size=12, color="white"),
+                    bgcolor="rgba(30,30,30,0.85)"
+                )
+            ]
         )
-        
+
         return fig
         
     except Exception as e:
         print(f"Error creating time wheel: {e}")
+        import traceback
+        traceback.print_exc()
         return go.Figure().add_annotation(
             text=f"Error creating time wheel: {str(e)}",
             xref="paper", yref="paper", x=0.5, y=0.5,
