@@ -29,11 +29,12 @@ from helper_functions import (
     create_station_role_spider,
     create_cluster_comparison_spider,
     create_arima_forecast,
-    create_prophet_forecast,
     predict_peak_periods_standalone,
     detect_station_anomalies,
     create_arrivals_departures_spider_plot,
-    create_weekly_seasonal_plot
+    create_weekly_seasonal_plot,
+    create_tominski_time_wheel,
+    create_parallel_coordinates_plot
 )
 
 # ── APPLICATION CONFIGURATION ──────────────────────────────────────────────────
@@ -187,6 +188,10 @@ def main():
         st.header("📊 Daily Rides Overview")
         st.write("Shows total bike rides and patterns over time with simulated hourly granularity")
         
+        # Add some spacing
+        st.markdown("")
+        st.markdown("")
+        
         # Chart type selection
         chart_type = st.radio(
             "Select chart type:",
@@ -309,7 +314,7 @@ def main():
             # Y-axis selection
             y_axis_option = st.selectbox(
                 "Choose Y-axis for Spider Glyph:",
-                ["Month", "Distance from Manhattan", "Balance Ratio", "Activity Density", "Time Wheel"],
+                ["Month", "Distance from Manhattan", "Balance Ratio", "Activity Density", "Cyclic Time"],
                 help="Different Y-axis options provide different insights into station characteristics"
             )
             
@@ -349,15 +354,15 @@ def main():
                 except Exception as e:
                     st.error(f"Error creating activity density spider glyph: {e}")
                     
-            elif y_axis_option == "Time Wheel":
-                st.subheader("🕐 Time Wheel Visualization")
+            elif y_axis_option == "Cyclic Time":
+                st.subheader("🕐 Cyclic Time Visualization")
                 try:
                     time_wheel_fig = create_time_wheel_plot(combined)
                     st.plotly_chart(time_wheel_fig, use_container_width=True)
                     st.info("Polar plot showing activity patterns by hour (angle) and day of week (radius). Each point represents activity level at that time.")
-                    with st.expander("ℹ️ How to read the Time Wheel", expanded=False):
+                    with st.expander("ℹ️ How to read the Cyclic Time Plot", expanded=False):
                         st.markdown("""
-                        **🕐 Time Wheel Interpretation:**
+                        **🕐 Cyclic Time Interpretation:**
                         - **Angle (Clock Position)**: Hour of day (12 o'clock = midnight, 3 o'clock = 6am, etc.)
                         - **Distance from Center**: Day of week (inner = Monday, outer = Sunday)
                         - **Point Size**: Relative activity level at that hour/day combination
@@ -369,7 +374,77 @@ def main():
                         - **Night Activity**: Smaller points during late night hours (10pm-5am)
                         """)
                 except Exception as e:
-                    st.error(f"Error creating time wheel plot: {e}")
+                    st.error(f"Error creating cyclic time plot: {e}")
+
+        # 5. TOMINSKI TIME WHEEL PLOT
+        st.header("🕰️ Tominski Time Wheel")
+        st.markdown("""
+        **Multi-scale temporal visualization combining hours, days, and months in a single circular plot.**
+        
+        This advanced time wheel shows:
+        - **Inner rings**: Different months and quarters
+        - **Outer rings**: Days of the week variations
+        - **Angular position**: Hours of the day (24-hour cycle)
+        - **Point size**: Activity intensity at that specific time
+        """)
+        
+        try:
+            tominski_fig = create_tominski_time_wheel(combined)
+            st.plotly_chart(tominski_fig, use_container_width=True)
+            with st.expander("ℹ️ How to read the Tominski Time Wheel", expanded=False):
+                st.markdown("""
+                **🕰️ Multi-Scale Time Wheel Reading Guide:**
+                - **Center to Edge**: Represents temporal hierarchy (months → days → hours)
+                - **Angle (0° = Top)**: Hour of day (clockwise from midnight)
+                - **Radius Rings**: Different months and day-of-week combinations
+                - **Marker Size**: Activity intensity at that specific time
+                - **Colors**: Different months for seasonal comparison
+                
+                **🎯 What This Reveals:**
+                - **Seasonal Patterns**: How activity changes across months
+                - **Weekly Cycles**: Differences between weekdays and weekends
+                - **Daily Rhythms**: Peak hours and quiet periods
+                - **Multi-Scale Interactions**: How different time scales influence each other
+                """)
+        except Exception as e:
+            st.error(f"Error creating Tominski time wheel: {e}")
+
+        # 6. PARALLEL COORDINATES PLOT
+        st.header("📊 Parallel Coordinates Analysis")
+        st.markdown("""
+        **Multi-dimensional analysis showing relationships between different station characteristics.**
+        
+        This visualization reveals:
+        - **Station Profiles**: How different metrics relate to each other
+        - **Cluster Patterns**: Groups of stations with similar characteristics
+        - **Trade-offs**: Relationships between activity, balance, and location
+        - **Outliers**: Stations with unusual characteristic combinations
+        """)
+        
+        try:
+            parallel_fig = create_parallel_coordinates_plot(combined)
+            st.plotly_chart(parallel_fig, use_container_width=True)
+            with st.expander("ℹ️ How to read the Parallel Coordinates", expanded=False):
+                st.markdown("""
+                **📊 Parallel Coordinates Reading Guide:**
+                - **Each Line**: Represents one station across all metrics
+                - **Vertical Axes**: Different station characteristics (activity, balance, etc.)
+                - **Line Color**: Activity level (purple = low, yellow = high)
+                - **Line Patterns**: Show relationships between metrics
+                
+                **🔍 What to Look For:**
+                - **Parallel Lines**: Stations with similar profiles
+                - **Converging Lines**: Strong correlations between metrics
+                - **Diverging Lines**: Trade-offs between characteristics
+                - **Outlier Lines**: Stations with unique combinations
+                
+                **🎯 Interactive Features:**
+                - **Brush Selection**: Click and drag on any axis to filter
+                - **Multi-Selection**: Select ranges on multiple axes simultaneously
+                - **Pattern Discovery**: Find stations matching specific criteria
+                """)
+        except Exception as e:
+            st.error(f"Error creating parallel coordinates plot: {e}")
 
     elif mode == "Timeline Map":
         render_timeline_mode(combined, dates, st.session_state)
@@ -800,39 +875,15 @@ def render_models_map_mode(combined, dates, session_state):
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════════════════
-    # 2. PROPHET FORECAST
+    # 2. PEAK/OFF-PEAK PREDICTION  
     # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader("📈 Prophet Forecast")
-
-    # Forecast days control moved to main area
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        forecast_days_prophet = st.slider("Forecast Days:", 3, 14, 7, key="prophet_days")
-    with col2:
-        st.write(f"**Station:** {selected_station}")
-
-    with st.spinner("Running Prophet model..."):
-        try:
-            fig_prophet, message_prophet = create_prophet_forecast(combined, selected_station, forecast_days_prophet)
-            st.plotly_chart(fig_prophet, use_container_width=True)
-            st.info(message_prophet)
-        except Exception as e:
-            st.error(f"Error in Prophet forecast: {e}")
-
-    st.markdown("---")
-
-    # ═══════════════════════════════════════════════════════════════════════════════
-    # 3. PEAK/OFF-PEAK PREDICTION
-    # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader("⏰ Peak/Off-Peak Analysis with Continuous Intensity")
+    st.subheader("⏰ Peak/Off-Peak Analysis")
     
-    # Enhanced date selection for peak analysis
-    st.markdown("**📅 Select Analysis Period:**")
-    
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # Simple date selection
+    col1, col2 = st.columns(2)
     
     with col1:
-        analysis_mode = st.radio(
+        analysis_mode = st.selectbox(
             "Analysis Mode:",
             ["Single Day", "Date Range", "All Time"],
             help="Choose the time period for peak analysis"
@@ -840,64 +891,49 @@ def render_models_map_mode(combined, dates, session_state):
     
     with col2:
         if analysis_mode == "Single Day":
-            peak_start_date = st.date_input(
-                "Analysis Date:",
+            analysis_start = st.date_input(
+                "Select Date:",
                 value=analysis_date,
                 min_value=dates[0],
                 max_value=dates[-1],
-                key="peak_single_date"
+                key="peak_single"
             )
-            peak_end_date = None
-            
+            analysis_end = None
         elif analysis_mode == "Date Range":
-            peak_start_date = st.date_input(
+            analysis_start = st.date_input(
                 "Start Date:",
                 value=analysis_date,
                 min_value=dates[0],
                 max_value=dates[-1],
-                key="peak_start_date"
+                key="peak_range_start"
             )
-            
-        else:  # All Time
-            peak_start_date = dates[0]
-            peak_end_date = dates[-1]
-    
-    with col3:
-        if analysis_mode == "Date Range":
-            # Calculate max end date (up to 1 month from start)
-            max_end_date = min(
-                peak_start_date + datetime.timedelta(days=31),
-                dates[-1]
-            )
-            peak_end_date = st.date_input(
+            analysis_end = st.date_input(
                 "End Date:",
-                value=min(
-                    peak_start_date + datetime.timedelta(days=7),
-                    max_end_date
-                ),
-                min_value=peak_start_date,
-                max_value=max_end_date,
-                key="peak_end_date"
+                value=min(analysis_date + datetime.timedelta(days=7), dates[-1]),
+                min_value=analysis_start,
+                max_value=dates[-1],
+                key="peak_range_end"
             )
-        else:
-            st.write("")  # Empty placeholder
-
-    # Analysis information
+        else:  # All Time
+            analysis_start = dates[0]
+            analysis_end = dates[-1]
+    
+    # Show analysis info
     if analysis_mode == "Single Day":
-        st.info(f"🔍 Analyzing peak patterns for {peak_start_date.strftime('%B %d, %Y')}")
+        st.info(f"🔍 Analyzing: {analysis_start}")
     elif analysis_mode == "Date Range":
-        days_diff = (peak_end_date - peak_start_date).days + 1
-        st.info(f"🔍 Analyzing peak patterns over {days_diff} days ({peak_start_date.strftime('%b %d')} - {peak_end_date.strftime('%b %d, %Y')})")
+        st.info(f"🔍 Analyzing: {analysis_start} to {analysis_end}")
     else:
-        st.info(f"🔍 Analyzing peak patterns across all available data ({dates[0].strftime('%b %d, %Y')} - {dates[-1].strftime('%b %d, %Y')})")
+        st.info(f"🔍 Analyzing: All available data")
 
-    with st.spinner("Analyzing peak periods with continuous intensity mapping..."):
+    # Run peak analysis
+    with st.spinner("Analyzing peak periods..."):
         try:
             use_all_time = (analysis_mode == "All Time")
             fig_peak = predict_peak_periods_standalone(
                 combined, 
-                peak_start_date, 
-                peak_end_date, 
+                analysis_start, 
+                analysis_end, 
                 use_all_time
             )
             st.plotly_chart(fig_peak, use_container_width=True)
@@ -905,26 +941,21 @@ def render_models_map_mode(combined, dates, session_state):
             # Add explanation
             with st.expander("ℹ️ How to read the Peak Analysis", expanded=False):
                 st.markdown("""
-                **🌡️ Continuous Color Mapping:**
-                - **🔵 Cold Blue**: Off-peak stations with low activity
-                - **🟡 Yellow**: Medium activity stations
-                - **🔴 Hot Red**: Peak stations with high activity
-                - **Marker Size**: Proportional to activity level
+                **🌡️ 5-Level Color Scale:**
+                - **🔵 Cold Blue (0-20%)**: Very low activity stations
+                - **🟦 Cool Blue (20-40%)**: Low activity stations  
+                - **🟡 Yellow (40-60%)**: Medium activity stations
+                - **� Orange (60-80%)**: High activity stations
+                - **🔴 Hot Red (80-100%)**: Peak activity stations
                 
-                **📊 Peak Intensity Score:**
-                - Calculated as normalized activity level (0-100%)
-                - Takes into account the selected time period
-                - For date ranges: Uses average daily activity
-                - For single days: Uses total daily activity
-                
-                **🎯 Use Cases:**
-                - **Single Day**: Identify daily peak patterns
-                - **Date Range**: Find consistently busy stations
-                - **All Time**: Discover overall system hotspots
+                **📊 Analysis Details:**
+                - Marker size indicates activity level
+                - Percentages are relative to the selected time period
+                - Hover over stations to see detailed activity numbers
                 """)
                 
         except Exception as e:
-            st.error(f"Error in peak period analysis: {e}")
+            st.error(f"Error in peak analysis: {e}")
 
     st.markdown("---")
 
@@ -947,3 +978,5 @@ def render_models_map_mode(combined, dates, session_state):
 
 if __name__ == "__main__":
     main()
+
+

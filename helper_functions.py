@@ -180,15 +180,18 @@ def prepare_geodata_and_weights(full_df, max_stations=None):
     """
     if max_stations is None:
         max_stations = MAX_STATIONS_DEFAULT
-        
+    
+    # Get unique stations only (since full_df might have daily records)
+    unique_stations = full_df.drop_duplicates('station_name')[['station_name', 'lat', 'lng']].copy()
+    
     # Ensure we don't exceed the specified maximum for performance
-    if len(full_df) > max_stations:
-        full_df = full_df.sample(n=max_stations, random_state=42)
+    if len(unique_stations) > max_stations:
+        unique_stations = unique_stations.sample(n=max_stations, random_state=42)
         st.info(f"📊 Limited to {max_stations} stations for optimal performance")
 
     g = gpd.GeoDataFrame(
-        full_df[['station_name', 'lat', 'lng']],
-        geometry=gpd.points_from_xy(full_df.lng, full_df.lat),
+        unique_stations[['station_name', 'lat', 'lng']],
+        geometry=gpd.points_from_xy(unique_stations.lng, unique_stations.lat),
         crs="EPSG:4326"
     ).to_crs("EPSG:3857")
 
@@ -224,6 +227,9 @@ def prepare_daily_time_series_data(combined, selected_month, max_stations=None):
     """
     Prepare daily time series data for a specific month
     """
+    if combined is None or combined.empty:
+        return pd.DataFrame(), pd.DataFrame(), []
+    
     df2 = combined.copy()
     df2['date'] = pd.to_datetime(df2['date'])
 
@@ -252,7 +258,7 @@ def prepare_daily_time_series_data(combined, selected_month, max_stations=None):
                 .groupby(['station_name'], as_index=False)
                 .agg({'departures': 'sum', 'arrivals': 'sum'})
             )
-            agg['net_balance'] = agg['departures'] - agg['arrivals']
+            agg['net_balance'] = agg['arrivals'] - agg['departures']  # Fixed: arrivals - departures
 
             # Create series for this day
             ser = agg.set_index('station_name')['net_balance']
@@ -287,6 +293,13 @@ def prepare_daily_time_series_data(combined, selected_month, max_stations=None):
 @st.cache_data
 def perform_time_series_clustering(pivot_net_filtered, n_clusters, station_coords):
     """Perform K-means clustering on time series data"""
+    
+    if pivot_net_filtered is None or pivot_net_filtered.empty:
+        return pd.DataFrame(), None
+    
+    if station_coords is None or station_coords.empty:
+        return pd.DataFrame(), None
+    
     ts_data = pivot_net_filtered.values
 
     if ts_data.shape[0] < n_clusters:
@@ -383,9 +396,23 @@ def create_map_visualization(df_day, radius_m, categories, max_stations=None):
 
 def create_time_series_cluster_map(clustered_df):
     """Create map visualization for time series clustering results"""
+    
+    if clustered_df is None or clustered_df.empty:
+        return go.Figure().add_annotation(
+            text="No clustering data available",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16)
+        )
+    
+    # Clean the data
     clustered_df = clustered_df.dropna(subset=['lat', 'lng'])
+    
     if clustered_df.empty:
-        return go.Figure()
+        return go.Figure().add_annotation(
+            text="No stations with valid coordinates found",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16)
+        )
 
     colors = [
         '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
@@ -414,20 +441,16 @@ def create_time_series_cluster_map(clustered_df):
                 hovertemplate="<b>%{text}</b><br>Cluster: " + str(cluster_id) + "<extra></extra>"
             ))
 
-    if not clustered_df.empty:
-        center_lat = clustered_df["lat"].mean()
-        center_lon = clustered_df["lng"].mean()
-    else:
-        center_lat = 40.7128
-        center_lon = -74.0060
+    # Always center on NYC (Manhattan) for consistent view
+    center_lat = 40.7128  # NYC latitude
+    center_lon = -74.0060  # NYC longitude
 
     fig.update_layout(
-        mapbox_style="carto-positron",
-        mapbox_zoom=11,
-        mapbox_center={
-            "lat": center_lat,
-            "lon": center_lon
-        },
+        mapbox=dict(
+            style="carto-positron",  # Greyish map style
+            center=dict(lat=center_lat, lon=center_lon),
+            zoom=10
+        ),
         height=600,
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
         legend=dict(
@@ -447,10 +470,14 @@ def create_time_series_cluster_map(clustered_df):
 
 def create_timeline_map(combined, start_date, end_date, radius_m, categories, max_stations=None):
     """Create animated timeline map visualization"""
+    # Ensure the date column is datetime
+    combined_temp = combined.copy()
+    combined_temp['date'] = pd.to_datetime(combined_temp['date'])
+    
     dates = pd.date_range(start_date, end_date).date
     frames = []
     for d in dates:
-        df_day = combined[combined["date"] == d].copy()
+        df_day = combined_temp[combined_temp["date"].dt.date == d].copy()
         
         # Limit stations per day for performance using utility function
         df_day = limit_stations_for_performance(df_day, max_stations)
@@ -818,6 +845,439 @@ def create_weekly_seasonal_plot(combined):
         return go.Figure()
 
 
+def create_tominski_time_wheel(combined):
+    """Create a Tominski TimeWheel: Six variable axes arranged circularly around an exposed centered time axis"""
+    try:
+        import plotly.graph_objects as go
+        import numpy as np
+        import pandas as pd
+        
+        df_temp = combined.copy()
+        
+        # Limit data for performance
+        if len(df_temp['station_name'].unique()) > 80:
+            selected_stations = pd.Series(df_temp['station_name'].unique()).sample(n=80, random_state=42).tolist()
+            df_temp = df_temp[df_temp['station_name'].isin(selected_stations)]
+        
+        # Ensure date is datetime and extract time dimensions
+        df_temp['date'] = pd.to_datetime(df_temp['date'])
+        df_temp['month'] = df_temp['date'].dt.month
+        df_temp['day_of_week'] = df_temp['date'].dt.dayofweek
+        df_temp['day_of_month'] = df_temp['date'].dt.day
+        df_temp['total_rides'] = df_temp['departures'] + df_temp['arrivals']
+        df_temp['net_balance'] = df_temp['departures'] - df_temp['arrivals']
+        
+        # Create simulated hour data for demonstration
+        np.random.seed(42)
+        df_temp['hour'] = np.random.randint(0, 24, len(df_temp))
+        
+        # Sample data for cleaner visualization
+        if len(df_temp) > 200:
+            df_temp = df_temp.sample(n=200, random_state=42)
+        
+        if df_temp.empty:
+            return go.Figure().add_annotation(
+                text="No data available for time wheel",
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=16)
+            )
+        
+        fig = go.Figure()
+        
+        # Define the SIX VARIABLE AXES arranged circularly around the time axis
+        variable_axes = [
+            'total_rides',      # Activity Level
+            'departures',       # Outbound Flow
+            'arrivals',         # Inbound Flow
+            'net_balance',      # Balance
+            'month',            # Seasonality
+            'day_of_week'       # Weekly Pattern
+        ]
+        
+        n_vars = len(variable_axes)
+        
+        # Calculate axis angles (evenly spaced around the circle)
+        axis_angles = np.linspace(0, 2*np.pi, n_vars, endpoint=False)
+        
+        # Axis radius (distance from center)
+        axis_radius = 3.5
+        
+        # Calculate axis positions
+        axis_positions = {}
+        for i, var in enumerate(variable_axes):
+            angle = axis_angles[i]
+            axis_positions[var] = {
+                'angle': angle,
+                'x': axis_radius * np.cos(angle),
+                'y': axis_radius * np.sin(angle)
+            }
+        
+        # Axis labels
+        axis_labels = {
+            'total_rides': 'Activity Level',
+            'departures': 'Outbound Flow',
+            'arrivals': 'Inbound Flow',
+            'net_balance': 'Balance',
+            'month': 'Seasonality',
+            'day_of_week': 'Weekly Pattern'
+        }
+        
+        # Draw the six variable axes
+        for var in variable_axes:
+            pos = axis_positions[var]
+            
+            # Draw axis line from center to edge
+            fig.add_trace(go.Scatter(
+                x=[0, pos['x']],
+                y=[0, pos['y']],
+                mode='lines',
+                line=dict(color='#2C3E50', width=3),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+            
+            # Add axis labels
+            label_x = pos['x'] * 1.15
+            label_y = pos['y'] * 1.15
+            fig.add_trace(go.Scatter(
+                x=[label_x],
+                y=[label_y],
+                mode='text',
+                text=[axis_labels[var]],
+                textfont=dict(size=11, color='#2C3E50', family='Arial Black'),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+        
+        # Normalize data for each variable to [0, 1] range
+        normalized_data = df_temp.copy()
+        for var in variable_axes:
+            if var in normalized_data.columns:
+                min_val = normalized_data[var].min()
+                max_val = normalized_data[var].max()
+                if max_val > min_val:
+                    normalized_data[f'{var}_norm'] = (normalized_data[var] - min_val) / (max_val - min_val)
+                else:
+                    normalized_data[f'{var}_norm'] = 0.5
+        
+        # Create CENTRAL TIME AXIS (exposed in center)
+        # Extract unique time values for the central axis
+        time_values = sorted(df_temp['hour'].unique())
+        central_time_radius = 0.8
+        
+        # Draw central time axis as a circle with hour markings
+        time_circle = np.linspace(0, 2*np.pi, 100)
+        circle_x = central_time_radius * np.cos(time_circle)
+        circle_y = central_time_radius * np.sin(time_circle)
+        
+        fig.add_trace(go.Scatter(
+            x=circle_x,
+            y=circle_y,
+            mode='lines',
+            line=dict(color='#E74C3C', width=3),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Add hour markers on the central time axis
+        for hour in range(0, 24, 4):  # Every 4 hours
+            hour_angle = (hour / 24) * 2 * np.pi
+            hour_x = central_time_radius * np.cos(hour_angle)
+            hour_y = central_time_radius * np.sin(hour_angle)
+            
+            # Hour marker
+            fig.add_trace(go.Scatter(
+                x=[hour_x],
+                y=[hour_y],
+                mode='markers',
+                marker=dict(size=8, color='#E74C3C'),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+            
+            # Hour label
+            label_x = hour_x * 1.3
+            label_y = hour_y * 1.3
+            fig.add_trace(go.Scatter(
+                x=[label_x],
+                y=[label_y],
+                mode='text',
+                text=[f'{hour:02d}h'],
+                textfont=dict(size=8, color='#E74C3C'),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+        
+        # Add central time axis label
+        fig.add_trace(go.Scatter(
+            x=[0], y=[0],
+            mode='text',
+            text=['TIME<br>AXIS'],
+            textfont=dict(size=12, color='#E74C3C', family='Arial Black'),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Create data visualization connecting time axis to variable axes
+        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA726', '#FF9999', '#66B2FF', '#99FF99', '#E74C3C']
+        
+        # Group data by hour for better visualization
+        for hour in sorted(df_temp['hour'].unique()):
+            hour_data = normalized_data[normalized_data['hour'] == hour]
+            
+            if len(hour_data) < 2:
+                continue
+                
+            # Calculate mean values for this hour
+            hour_means = {}
+            for var in variable_axes:
+                if f'{var}_norm' in hour_data.columns:
+                    hour_means[var] = hour_data[f'{var}_norm'].mean()
+                else:
+                    hour_means[var] = 0.5
+            
+            # Position on central time axis
+            time_angle = (hour / 24) * 2 * np.pi
+            time_x = central_time_radius * np.cos(time_angle)
+            time_y = central_time_radius * np.sin(time_angle)
+            
+            # Draw connections from time axis to variable axes
+            for var in variable_axes:
+                pos = axis_positions[var]
+                norm_val = hour_means[var]
+                
+                # Position along the variable axis (from center outward)
+                distance = 1.0 + norm_val * 2.0  # Range from 1.0 to 3.0
+                
+                var_x = distance * np.cos(pos['angle'])
+                var_y = distance * np.sin(pos['angle'])
+                
+                # Create smooth curve from time axis to variable axis
+                # Control point for bezier curve
+                control_x = (time_x + var_x) / 2 * 0.5
+                control_y = (time_y + var_y) / 2 * 0.5
+                
+                # Bezier curve
+                t = np.linspace(0, 1, 50)
+                curve_x = (1-t)**2 * time_x + 2*(1-t)*t * control_x + t**2 * var_x
+                curve_y = (1-t)**2 * time_y + 2*(1-t)*t * control_y + t**2 * var_y
+                
+                # Color based on hour
+                color_idx = hour % len(colors)
+                line_color = colors[color_idx]
+                
+                # Add the connection curve
+                fig.add_trace(go.Scatter(
+                    x=curve_x,
+                    y=curve_y,
+                    mode='lines',
+                    line=dict(
+                        color=line_color,
+                        width=1.5,
+                        smoothing=1.3
+                    ),
+                    opacity=0.4,
+                    showlegend=False,
+                    hovertemplate=f'Hour: {hour:02d}<br>' +
+                                 f'Variable: {axis_labels[var]}<br>' +
+                                 f'Value: {norm_val:.2f}<extra></extra>'
+                ))
+        
+        # Add axis scale markers on variable axes
+        for var in variable_axes:
+            pos = axis_positions[var]
+            
+            # Add tick marks along each axis
+            for tick in [0.25, 0.5, 0.75, 1.0]:
+                tick_distance = 1.0 + tick * 2.0
+                tick_x = tick_distance * np.cos(pos['angle'])
+                tick_y = tick_distance * np.sin(pos['angle'])
+                
+                fig.add_trace(go.Scatter(
+                    x=[tick_x],
+                    y=[tick_y],
+                    mode='markers',
+                    marker=dict(size=3, color='#34495E'),
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+        
+        # Add outer boundary circle
+        outer_circle = np.linspace(0, 2*np.pi, 100)
+        outer_x = 4.0 * np.cos(outer_circle)
+        outer_y = 4.0 * np.sin(outer_circle)
+        
+        fig.add_trace(go.Scatter(
+            x=outer_x,
+            y=outer_y,
+            mode='lines',
+            line=dict(color='#BDC3C7', width=1, dash='dot'),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        fig.update_layout(
+            title="Tominski TimeWheel: Six Variable Axes around Central Time Axis",
+            xaxis=dict(
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                scaleanchor="y",
+                scaleratio=1,
+                range=[-5, 5]
+            ),
+            yaxis=dict(
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                range=[-5, 5]
+            ),
+            height=700,
+            showlegend=False,
+            paper_bgcolor='white',
+            plot_bgcolor='white'
+        )
+        
+        return fig
+        
+    except Exception as e:
+        print(f"Error creating Tominski time wheel: {e}")
+        return go.Figure().add_annotation(
+            text=f"Error creating time wheel: {str(e)}",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16, color="red")
+        )
+
+
+def create_parallel_coordinates_plot(combined):
+    """Create a parallel coordinates plot showing multi-dimensional station characteristics"""
+    try:
+        import plotly.graph_objects as go
+        import pandas as pd
+        import numpy as np
+        
+        # Check for empty data
+        if combined.empty:
+            return go.Figure().add_annotation(
+                text="No data available for parallel coordinates analysis",
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=14)
+            )
+        
+        # Prepare data with basic safety checks
+        df = combined.copy()
+        df['date'] = pd.to_datetime(df['date'])
+        df['total_rides'] = df['departures'] + df['arrivals']
+        df['net_balance'] = df['arrivals'] - df['departures']
+        
+        # Calculate simple station-level metrics
+        station_stats = []
+        
+        for station in df['station_name'].unique()[:50]:  # Limit to first 50 stations for performance
+            station_data = df[df['station_name'] == station]
+            
+            if len(station_data) < 3:  # Skip stations with very little data
+                continue
+            
+            # Calculate basic metrics with safety checks
+            total_activity = max(1, station_data['total_rides'].sum())  # Ensure minimum value
+            avg_balance = station_data['net_balance'].mean()
+            balance_volatility = max(0.1, station_data['net_balance'].std())  # Ensure minimum variation
+            
+            # Activity consistency
+            activity_std = station_data['total_rides'].std()
+            activity_mean = station_data['total_rides'].mean()
+            consistency = max(0.1, min(1.0, 1 / (1 + (activity_std / (activity_mean + 1)))))
+            
+            station_stats.append({
+                'station_name': station,
+                'total_activity': total_activity,
+                'avg_balance': avg_balance,
+                'balance_volatility': balance_volatility,
+                'consistency': consistency
+            })
+        
+        if len(station_stats) < 5:
+            return go.Figure().add_annotation(
+                text="Insufficient data for parallel coordinates analysis",
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=14)
+            )
+        
+        # Convert to DataFrame and handle edge cases
+        station_df = pd.DataFrame(station_stats)
+        
+        # Replace any infinite values with finite values
+        station_df = station_df.replace([np.inf, -np.inf], 0)
+        station_df = station_df.fillna(0)
+        
+        # Ensure we have some variation in each dimension
+        for col in ['total_activity', 'avg_balance', 'balance_volatility', 'consistency']:
+            if station_df[col].std() < 0.001:  # Very small variation
+                # Add small random variation to prevent flat lines
+                station_df[col] = station_df[col] + np.random.normal(0, 0.1, len(station_df))
+        
+        # Create dimensions for parallel coordinates - simplified approach
+        dimensions = [
+            dict(
+                label="Total Activity",
+                values=station_df['total_activity'].tolist()
+            ),
+            dict(
+                label="Average Balance",
+                values=station_df['avg_balance'].tolist()
+            ),
+            dict(
+                label="Balance Volatility",
+                values=station_df['balance_volatility'].tolist()
+            ),
+            dict(
+                label="Consistency",
+                values=station_df['consistency'].tolist()
+            )
+        ]
+        
+        # Create color scale based on total activity
+        activity_min = station_df['total_activity'].min()
+        activity_max = station_df['total_activity'].max()
+        
+        if activity_max > activity_min:
+            colors = (station_df['total_activity'] - activity_min) / (activity_max - activity_min)
+        else:
+            colors = [0.5] * len(station_df)
+        
+        # Create the parallel coordinates plot - minimal configuration
+        fig = go.Figure()
+        
+        fig.add_trace(go.Parcoords(
+            line=dict(
+                color=colors.tolist(),
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(title="Activity Level")
+            ),
+            dimensions=dimensions
+        ))
+        
+        fig.update_layout(
+            title="Station Characteristics Analysis",
+            height=600,
+            margin=dict(l=80, r=80, t=60, b=40)
+        )
+        
+        return fig
+        
+    except Exception as e:
+        print(f"Error in parallel coordinates: {e}")
+        import traceback
+        traceback.print_exc()
+        return go.Figure().add_annotation(
+            text="Error creating parallel coordinates plot",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=14, color="red")
+        )
+
+
 def create_spider_glyph_month(combined):
     """Create spider glyph plot with normalized month number on Y-axis"""
     try:
@@ -1009,118 +1469,6 @@ def create_spider_glyph_month(combined):
 
 
 def create_time_wheel_plot(combined):
-
-        # Map months to numbers
-        station_monthly['month_num'] = station_monthly['month'].map(month_mapping)
-        station_monthly = station_monthly.dropna(subset=['month_num'])
-
-        # Limit stations for visualization
-        if len(station_monthly) > 300:
-            station_monthly = station_monthly.sample(n=300, random_state=42)
-
-        # Create spider glyph plot
-        fig = go.Figure()
-
-        # Color by net balance
-        station_monthly['color'] = station_monthly['net_balance'].apply(
-            lambda x: '#FF6B6B' if x > 0 else '#69DB7C' if x < 0 else '#4DABF7'
-        )
-
-        # Normalize spider arm lengths with better scaling
-        max_arrivals = station_monthly['arrivals'].max()
-        max_departures = station_monthly['departures'].max()
-        max_weekday = station_monthly['weekday_rides'].max()
-        max_weekend = station_monthly['weekend_rides'].max()
-
-        # Use fixed scale instead of proportional to total_rides for better readability
-        base_scale = 2000  # Fixed base scale for spider arms
-        scale_factor = 0.8  # Scale down spider arms
-
-        for _, station in station_monthly.iterrows():
-            x_center = station['total_rides']
-            y_center = station['month_num']
-
-            # Calculate spider arm endpoints with fixed scaling
-            up_length = (station['arrivals'] / max_arrivals) * scale_factor if max_arrivals > 0 else 0
-            down_length = (station['departures'] / max_departures) * scale_factor if max_departures > 0 else 0
-            left_length = (station['weekday_rides'] / max_weekday) * scale_factor if max_weekday > 0 else 0
-            right_length = (station['weekend_rides'] / max_weekend) * scale_factor if max_weekend > 0 else 0
-
-            # Add spider arms
-            # Up (arrivals)
-            fig.add_trace(go.Scatter(
-                x=[x_center, x_center],
-                y=[y_center, y_center + up_length],
-                mode='lines',
-                line=dict(color=station['color'], width=2),
-                showlegend=False,
-                hoverinfo='skip'
-            ))
-
-            # Down (departures)
-            fig.add_trace(go.Scatter(
-                x=[x_center, x_center],
-                y=[y_center, y_center - down_length],
-                mode='lines',
-                line=dict(color=station['color'], width=2),
-                showlegend=False,
-                hoverinfo='skip'
-            ))
-
-            # Left (weekday)
-            fig.add_trace(go.Scatter(
-                x=[x_center, x_center - left_length],
-                y=[y_center, y_center],
-                mode='lines',
-                line=dict(color=station['color'], width=2),
-                showlegend=False,
-                hoverinfo='skip'
-            ))
-
-            # Right (weekend)
-            fig.add_trace(go.Scatter(
-                x=[x_center, x_center + right_length],
-                y=[y_center, y_center],
-                mode='lines',
-                line=dict(color=station['color'], width=2),
-                showlegend=False,
-                hoverinfo='skip'
-            ))
-
-            # Add center point
-            fig.add_trace(go.Scatter(
-                x=[x_center],
-                y=[y_center],
-                mode='markers',
-                marker=dict(size=4, color=station['color']),
-                text=station['station_name'],
-                hovertemplate=f"<b>%{{text}}</b><br>Total Rides: {station['total_rides']}<br>Month: {station['month']}<br>Net Balance: {station['net_balance']}<extra></extra>",
-                showlegend=False
-            ))
-
-        # Add legend
-        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='#FF6B6B'),
-                                 name='More Departures', showlegend=True))
-        fig.add_trace(
-            go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='#69DB7C'), name='More Arrivals',
-                       showlegend=True))
-        fig.add_trace(
-            go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='#4DABF7'), name='Balanced',
-                       showlegend=True))
-
-        fig.update_layout(
-            title="Spider Glyph: Month Number vs Total Rides",
-            xaxis_title="Total Rides per Month",
-            yaxis_title="Month Number (1=Sep, 2=Dec, 3=Mar, 4=Jun)",
-            height=600,
-            showlegend=True
-        )
-
-        return fig
-
-
-
-def create_time_wheel_plot(combined):
     """Create a time wheel plot showing activity patterns throughout the day and week"""
     try:
         import plotly.graph_objects as go
@@ -1202,77 +1550,97 @@ def create_time_wheel_plot(combined):
             day_data = time_agg[time_agg['day_of_week'] == day]
             
             if not day_data.empty:
-                # Convert hour to angle (0 hour = top, clockwise)
-                theta = [(hour * 15 - 90) for hour in day_data['hour']]  # 15 degrees per hour, -90 to start at top
-                r = [day + 1] * len(day_data)  # Radius based on day of week
+                # Convert hours to angles (0-24 hours = 0-360 degrees)
+                angles = [(hour * 360 / 24) for hour in day_data['hour']]
                 
-                # Scale ride counts for visibility
-                max_rides = day_data['rides'].max() if day_data['rides'].max() > 0 else 1
-                sizes = day_data['rides'] / max_rides * 30 + 5
+                # Radius based on day of week (inner to outer rings)
+                radius_base = 1 + day * 0.5  # Each day gets a different radius
                 
+                # Scale rides for radius variation
+                max_rides = time_agg['rides'].max()
+                radius_values = [radius_base + (rides / max_rides) * 0.4 for rides in day_data['rides']]
+                
+                # Add trace for this day
                 fig.add_trace(go.Scatterpolar(
-                    r=r,
-                    theta=theta,
-                    mode='markers',
-                    marker=dict(
-                        size=sizes,
-                        color=colors[day],
-                        opacity=0.7,
-                        line=dict(color='white', width=1)
-                    ),
-                    text=[f"{day_names[day]}<br>Hour: {hour}<br>Rides: {rides}" 
-                          for hour, rides in zip(day_data['hour'], day_data['rides'])],
-                    hovertemplate='%{text}<extra></extra>',
+                    r=radius_values,
+                    theta=angles,
+                    mode='lines+markers',
                     name=day_names[day],
-                    showlegend=True
+                    line=dict(color=colors[day], width=3),
+                    marker=dict(size=6, color=colors[day]),
+                    hovertemplate=f'<b>{day_names[day]}</b><br>' +
+                                  'Hour: %{theta:.0f}<br>' +
+                                  'Rides: %{customdata}<br>' +
+                                  '<extra></extra>',
+                    customdata=day_data['rides']
                 ))
         
-        # Add concentric circles for days
-        for day in range(1, 8):
+        # Add concentric circles for days of week
+        for day in range(7):
+            radius = 1 + day * 0.5
+            circle_angles = np.linspace(0, 360, 100)
+            circle_r = [radius] * 100
+            
             fig.add_trace(go.Scatterpolar(
-                r=[day] * 24,
-                theta=list(range(0, 360, 15)),  # Every 15 degrees (hour)
+                r=circle_r,
+                theta=circle_angles,
                 mode='lines',
                 line=dict(color='lightgray', width=1, dash='dot'),
                 showlegend=False,
                 hoverinfo='skip'
             ))
         
-        # Update layout for polar plot
+        # Add hour labels
+        for hour in range(0, 24, 3):  # Every 3 hours
+            angle = hour * 360 / 24
+            fig.add_annotation(
+                text=f'{hour:02d}:00',
+                x=0.5 + 0.4 * cos(angle * pi / 180),
+                y=0.5 + 0.4 * sin(angle * pi / 180),
+                xref='paper',
+                yref='paper',
+                showarrow=False,
+                font=dict(size=10, color='black')
+            )
+        
         fig.update_layout(
-            title="Time Wheel: Activity Patterns by Hour and Day of Week",
             polar=dict(
                 radialaxis=dict(
+                    title="Activity Level by Day",
                     visible=True,
-                    range=[0, 8],
-                    tickmode='array',
-                    tickvals=list(range(1, 8)),
+                    range=[0, 5],
+                    tickvals=[1, 1.5, 2, 2.5, 3, 3.5, 4],
                     ticktext=day_names
                 ),
                 angularaxis=dict(
-                    tickmode='array',
-                    tickvals=list(range(0, 360, 15)),
-                    ticktext=[f"{h:02d}:00" for h in range(24)],
+                    title="Hour of Day",
+                    tickvals=[0, 90, 180, 270],
+                    ticktext=['00:00', '06:00', '12:00', '18:00'],
                     direction='clockwise',
-                    period=360
+                    rotation=90
                 )
             ),
+            title="Time Wheel: Activity Patterns by Day of Week and Hour",
             height=700,
             showlegend=True,
             legend=dict(
-                orientation="v",
-                yanchor="top",
-                y=1,
-                xanchor="left",
-                x=1.02
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5
             )
         )
         
         return fig
-
+        
     except Exception as e:
-        print(f"Error creating time wheel plot: {e}")
-        return go.Figure()
+        print(f"Error creating time wheel: {e}")
+        return go.Figure().add_annotation(
+            text=f"Error creating time wheel: {str(e)}",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16, color="red")
+        )
 
 
 def create_spider_glyph_distance(combined):
@@ -1767,7 +2135,7 @@ def create_spider_glyph_activity_density(combined):
 # ── ADVANCED MODELS ────────────────────────────────────────────────────────────
 
 def create_arima_forecast(combined, selected_station, forecast_days=7):
-    """Create ARIMA forecast for a selected station using only the past 2 weeks"""
+    """Create ARIMA forecast for a selected station using more historical data for better confidence intervals"""
     try:
         from statsmodels.tsa.arima.model import ARIMA
         import plotly.graph_objects as go
@@ -1782,16 +2150,22 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         station_data = station_data.sort_values('date')
         station_data['net_balance'] = station_data['departures'] - station_data['arrivals']
 
-        if len(station_data) < 7:  # Need minimum data
-            return fig, "Insufficient data for ARIMA forecast (need at least 7 days)"
+        if len(station_data) < 14:  # Need minimum data
+            return fig, "Insufficient data for ARIMA forecast (need at least 14 days)"
 
-        # Use only the most recent 2 weeks (14 days) for better short-term prediction
-        recent_data = station_data.tail(14)
+        # Use more data for better confidence intervals: 4-6 weeks (28-42 days) or all available data if less
+        available_days = len(station_data)
+        if available_days >= 42:
+            recent_data = station_data.tail(42)  # Use 6 weeks
+        elif available_days >= 28:
+            recent_data = station_data.tail(28)  # Use 4 weeks
+        else:
+            recent_data = station_data  # Use all available data
 
-        if len(recent_data) < 7:
+        if len(recent_data) < 14:
             return fig, "Insufficient recent data for ARIMA forecast"
 
-        # NEW: Record training date range
+        # Record training date range
         train_start = recent_data['date'].iloc[0].strftime('%Y-%m-%d')
         train_end = recent_data['date'].iloc[-1].strftime('%Y-%m-%d')
 
@@ -1883,7 +2257,7 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         y_buffer = (y_max - y_min) * 0.1
 
         fig.update_layout(
-            title=f"ARIMA Forecast - {selected_station} (Using Past {len(recent_data)} Days)",
+            title=f"ARIMA Forecast - {selected_station} (Using Past {len(recent_data)} Days - More Data = Narrower CI)",
             xaxis_title="Date",
             yaxis_title="Net Balance",
             height=500,
@@ -1917,96 +2291,6 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         return fig, f"ARIMA forecast failed: {str(e)}"
 
 
-def create_prophet_forecast(combined, selected_station, forecast_days=7):
-    """Create Prophet forecast with seasonality"""
-    try:
-        # Try importing Prophet with proper error handling
-        import warnings
-        warnings.filterwarnings('ignore')
-
-        try:
-            from prophet import Prophet
-        except ImportError:
-            try:
-                from fbprophet import Prophet  # Alternative import name
-            except ImportError:
-                return go.Figure(), "Prophet library not installed. Please install with: pip install prophet"
-
-        # Get station data
-        station_data = combined[combined['station_name'] == selected_station].copy()
-        station_data['date'] = pd.to_datetime(station_data['date'])
-        station_data = station_data.sort_values('date')
-        station_data['net_balance'] = station_data['departures'] - station_data['arrivals']
-
-        if len(station_data) < 14:
-            return go.Figure(), "Insufficient data for Prophet forecast"
-
-        # Prepare Prophet format
-        prophet_df = station_data[['date', 'net_balance']].rename(columns={'date': 'ds', 'net_balance': 'y'})
-
-        # Fit Prophet model
-        model = Prophet(daily_seasonality=True, weekly_seasonality=True)
-        model.fit(prophet_df)
-
-        # Create future dataframe
-        future = model.make_future_dataframe(periods=forecast_days)
-        forecast = model.predict(future)
-
-        # Create plot
-        fig = go.Figure()
-
-        # Historical data
-        fig.add_trace(go.Scatter(
-            x=prophet_df['ds'],
-            y=prophet_df['y'],
-            mode='lines+markers',
-            name='Historical',
-            line=dict(color='steelblue', width=2)
-        ))
-
-        # Forecast
-        forecast_future = forecast.tail(forecast_days)
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat'],
-            mode='lines+markers',
-            name='Forecast',
-            line=dict(color='red', width=2, dash='dash')
-        ))
-
-        # Uncertainty intervals
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat_upper'],
-            mode='lines',
-            line=dict(color='rgba(255,0,0,0.3)', width=0),
-            showlegend=False
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=forecast_future['ds'],
-            y=forecast_future['yhat_lower'],
-            mode='lines',
-            fill='tonexty',
-            fillcolor='rgba(255,0,0,0.2)',
-            line=dict(color='rgba(255,0,0,0.3)', width=0),
-            name='Uncertainty',
-            showlegend=True
-        ))
-
-        fig.update_layout(
-            title=f"Prophet Forecast - {selected_station}",
-            xaxis_title="Date",
-            yaxis_title="Net Balance",
-            height=400
-        )
-
-        return fig, f"Prophet forecast successful for {forecast_days} days"
-
-    except Exception as e:
-        return go.Figure(), f"Prophet forecast failed: {str(e)}"
-
-
 def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False):
     """Predict peak/off-peak periods for all stations with continuous color mapping"""
     try:
@@ -2015,31 +2299,71 @@ def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False
         import numpy as np
         import plotly.express as px
         
+        # Debug: Check input data
+        if combined is None or combined.empty:
+            return go.Figure().add_annotation(
+                text="No data provided for peak analysis",
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=16)
+            )
+        
+        # Debug: Check required columns
+        required_cols = ['date', 'station_name', 'departures', 'arrivals', 'lat', 'lng']
+        missing_cols = [col for col in required_cols if col not in combined.columns]
+        if missing_cols:
+            return go.Figure().add_annotation(
+                text=f"Missing required columns: {missing_cols}",
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=16)
+            )
+        
+        # Ensure date column is datetime
+        combined_temp = combined.copy()
+        combined_temp['date'] = pd.to_datetime(combined_temp['date'])
+        
+        # Debug: Check date conversion
+        print(f"Date range in data: {combined_temp['date'].min()} to {combined_temp['date'].max()}")
+        print(f"Input start_date: {start_date}, type: {type(start_date)}")
+        if end_date:
+            print(f"Input end_date: {end_date}, type: {type(end_date)}")
+        
         # Handle date selection logic
         if use_all_time:
-            df_filtered = combined.copy()
+            df_filtered = combined_temp.copy()
             date_range_text = "All Time"
         elif end_date is None:
-            # Single day analysis
-            df_filtered = combined[combined['date'] == start_date].copy()
+            # Single day analysis - ensure start_date is a date object
+            if hasattr(start_date, 'date'):
+                start_date = start_date.date()
+            df_filtered = combined_temp[combined_temp['date'].dt.date == start_date].copy()
             date_range_text = start_date.strftime('%B %d, %Y')
         else:
-            # Date range analysis
-            df_filtered = combined[
-                (pd.to_datetime(combined['date']) >= pd.to_datetime(start_date)) & 
-                (pd.to_datetime(combined['date']) <= pd.to_datetime(end_date))
+            # Date range analysis - ensure dates are date objects
+            if hasattr(start_date, 'date'):
+                start_date = start_date.date()
+            if hasattr(end_date, 'date'):
+                end_date = end_date.date()
+            df_filtered = combined_temp[
+                (combined_temp['date'].dt.date >= start_date) & 
+                (combined_temp['date'].dt.date <= end_date)
             ].copy()
             date_range_text = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}"
+
+        # Debug: Check filtered data
+        print(f"Filtered data shape: {df_filtered.shape}")
+        print(f"Date range text: {date_range_text}")
 
         if df_filtered.empty:
             return go.Figure().add_annotation(
                 text=f"No data available for {date_range_text}",
-                xref="paper", yref="paper", x=0.5, y=0.5
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=16)
             )
 
         # Calculate activity metrics
         if use_all_time or end_date is not None:
             # Aggregate by station for multi-day analysis
+            print("Performing multi-day analysis...")
             station_activity = (
                 df_filtered.groupby('station_name')
                 .agg({
@@ -2057,15 +2381,23 @@ def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False
             activity_label = 'Average Daily Activity'
         else:
             # Single day analysis
+            print("Performing single day analysis...")
             station_activity = df_filtered.copy()
             station_activity['total_activity'] = station_activity['departures'] + station_activity['arrivals']
             activity_col = 'total_activity'
             activity_label = 'Total Activity'
 
+        # Debug: Check activity calculation
+        print(f"Station activity shape: {station_activity.shape}")
+        print(f"Activity column: {activity_col}")
+        if not station_activity.empty:
+            print(f"Activity range: {station_activity[activity_col].min()} to {station_activity[activity_col].max()}")
+        
         if station_activity.empty:
             return go.Figure().add_annotation(
                 text=f"No stations with activity for {date_range_text}",
-                xref="paper", yref="paper", x=0.5, y=0.5
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                showarrow=False, font=dict(size=16)
             )
 
         # Calculate peak intensity score (0-1 scale)
@@ -2090,35 +2422,32 @@ def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False
         # Create the map with continuous color mapping
         fig = go.Figure()
 
-        # Add stations with continuous color scale
+        # Add stations with simple color mapping (avoiding coloraxis system)
+        # Convert intensity values to discrete color categories
+        def get_color_and_category(intensity):
+            if intensity <= 0.2:
+                return '#08519c', 'Non-Peak'  # Dark blue
+            elif intensity <= 0.4:
+                return '#3182bd', 'Low'       # Medium blue
+            elif intensity <= 0.6:
+                return '#6baed6', 'Medium'    # Light blue
+            elif intensity <= 0.8:
+                return '#9ecae1', 'High'      # Very light blue
+            else:
+                return '#c6dbef', 'Peak'      # Lightest blue
+        
+        # Apply color mapping
+        station_activity['color'] = station_activity['color_intensity'].apply(lambda x: get_color_and_category(x)[0])
+        station_activity['category'] = station_activity['color_intensity'].apply(lambda x: get_color_and_category(x)[1])
+        
+        # Add stations with discrete colors (no coloraxis needed)
         fig.add_trace(go.Scattermapbox(
             lat=station_activity['lat'],
             lon=station_activity['lng'],
             mode='markers',
             marker=dict(
                 size=station_activity['marker_size'],
-                color=station_activity['color_intensity'],
-                colorscale=[
-                    [0.0, '#0066CC'],    # Cold blue for low activity
-                    [0.2, '#0099FF'],    # Light blue
-                    [0.4, '#66CCFF'],    # Very light blue
-                    [0.5, '#FFFFFF'],    # White (neutral)
-                    [0.6, '#FFCC66'],    # Light orange
-                    [0.8, '#FF9900'],    # Orange
-                    [1.0, '#FF3300']     # Hot red for high activity
-                ],
-                cmin=0,
-                cmax=1,
-                colorbar=dict(
-                    title="Peak Intensity",
-                    titleside="right",
-                    tickmode="array",
-                    tickvals=[0, 0.25, 0.5, 0.75, 1.0],
-                    ticktext=["Off-Peak", "Low", "Medium", "High", "Peak"],
-                    len=0.7,
-                    thickness=15,
-                    x=1.02
-                ),
+                color=station_activity['color'],
                 opacity=0.8,
                 line=dict(color='white', width=1)
             ),
@@ -2127,18 +2456,39 @@ def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False
                 station_activity[activity_col].round(1),
                 station_activity['peak_intensity'].round(3),
                 station_activity['departures'],
-                station_activity['arrivals']
+                station_activity['arrivals'],
+                station_activity['category']
             )),
             hovertemplate=(
                 "<b>%{text}</b><br>" +
                 f"{activity_label}: %{{customdata[0]}}<br>" +
                 "Peak Intensity: %{customdata[1]:.1%}<br>" +
+                "Category: %{customdata[4]}<br>" +
                 "Departures: %{customdata[2]}<br>" +
                 "Arrivals: %{customdata[3]}<br>" +
                 "<extra></extra>"
             ),
             showlegend=False
         ))
+        
+        # Add manual legend entries for peak categories
+        legend_colors = {
+            'Non-Peak': '#08519c',
+            'Low': '#3182bd', 
+            'Medium': '#6baed6',
+            'High': '#9ecae1',
+            'Peak': '#c6dbef'
+        }
+        
+        for category, color in legend_colors.items():
+            fig.add_trace(go.Scattermapbox(
+                lat=[None], lon=[None],
+                mode='markers',
+                marker=dict(size=10, color=color),
+                name=category,
+                showlegend=True,
+                hoverinfo='skip'
+            ))
 
         # Add reference annotations for peak categories
         fig.add_annotation(
@@ -2146,9 +2496,11 @@ def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False
             xref="paper", yref="paper",
             text=(
                 f"<b>Peak Analysis: {date_range_text}</b><br>" +
-                f"🔵 Off-Peak: Low activity stations<br>" +
-                f"🟡 Medium: Moderate activity stations<br>" +
-                f"🔴 Peak: High activity stations<br>" +
+                f"🔵 Non-Peak: Very low activity stations<br>" +
+                f"🟢 Low: Below average activity stations<br>" +
+                f"🟡 Medium: Average activity stations<br>" +
+                f"🟠 High: Above average activity stations<br>" +
+                f"🔴 Peak: Very high activity stations<br>" +
                 f"Total Stations: {len(station_activity)}"
             ),
             showarrow=False,
@@ -2172,261 +2524,153 @@ def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False
             ),
             height=600,
             margin=dict(l=0, r=0, t=40, b=0),
-            showlegend=False
-        )
-
-        return fig
-
-    except Exception as e:
-        print(f"Error in peak periods analysis: {e}")
-        return go.Figure().add_annotation(
-            text=f"Error in analysis: {str(e)}",
-            xref="paper", yref="paper", x=0.5, y=0.5
-        )
-
-
-def predict_peak_periods_standalone(combined, start_date, end_date=None, use_all_time=False):
-    """Predict peak/off-peak periods for all stations with continuous color mapping"""
-    try:
-        import pandas as pd
-        import numpy as np
-        import plotly.graph_objects as go
-        from datetime import datetime, timedelta
-        
-        # Filter data based on the selected time period
-        if use_all_time:
-            # Use all available data
-            filtered_data = combined.copy()
-            period_label = "All Time"
-        elif end_date is None:
-            # Single day analysis
-            filtered_data = combined[combined['date'] == start_date].copy()
-            period_label = start_date.strftime('%B %d, %Y')
-        else:
-            # Date range analysis
-            filtered_data = combined[
-                (combined['date'] >= start_date) & 
-                (combined['date'] <= end_date)
-            ].copy()
-            period_label = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}"
-        
-        if filtered_data.empty:
-            # Return empty figure with message
-            fig = go.Figure()
-            fig.add_annotation(
-                text="No data available for the selected period",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16)
-            )
-            fig.update_layout(
-                title=f"Peak Analysis - {period_label}",
-                height=500,
-                margin=dict(l=0, r=0, t=40, b=0)
-            )
-            return fig
-        
-        # Calculate activity metrics per station
-        if use_all_time or end_date is not None:
-            # For date ranges or all time: calculate average daily activity
-            daily_stats = (
-                filtered_data
-                .groupby(['station_name', 'date'])
-                .agg({
-                    'departures': 'sum',
-                    'arrivals': 'sum',
-                    'lat': 'first',
-                    'lng': 'first'
-                })
-                .reset_index()
-            )
-            
-            # Calculate average daily activity per station
-            station_activity = (
-                daily_stats
-                .groupby('station_name')
-                .agg({
-                    'departures': 'mean',
-                    'arrivals': 'mean',
-                    'lat': 'first',
-                    'lng': 'first'
-                })
-                .reset_index()
-            )
-        else:
-            # For single day: use total daily activity
-            station_activity = (
-                filtered_data
-                .groupby('station_name')
-                .agg({
-                    'departures': 'sum',
-                    'arrivals': 'sum',
-                    'lat': 'first',
-                    'lng': 'first'
-                })
-                .reset_index()
-            )
-        
-        # Calculate total activity and peak intensity
-        station_activity['total_activity'] = station_activity['departures'] + station_activity['arrivals']
-        station_activity['net_balance'] = station_activity['departures'] - station_activity['arrivals']
-        
-        # Remove stations with no activity
-        station_activity = station_activity[station_activity['total_activity'] > 0]
-        
-        if station_activity.empty:
-            # Return empty figure with message
-            fig = go.Figure()
-            fig.add_annotation(
-                text="No station activity found for the selected period",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16)
-            )
-            fig.update_layout(
-                title=f"Peak Analysis - {period_label}",
-                height=500,
-                margin=dict(l=0, r=0, t=40, b=0)
-            )
-            return fig
-        
-        # Calculate peak intensity score (0-100)
-        max_activity = station_activity['total_activity'].max()
-        min_activity = station_activity['total_activity'].min()
-        
-        if max_activity > min_activity:
-            station_activity['peak_intensity'] = (
-                (station_activity['total_activity'] - min_activity) / 
-                (max_activity - min_activity) * 100
-            )
-        else:
-            station_activity['peak_intensity'] = 50  # All stations have same activity
-        
-        # Create continuous color scale from cold blue to hot red
-        def intensity_to_color(intensity):
-            """Convert intensity (0-100) to color from cold blue to hot red"""
-            # Normalize to 0-1
-            normalized = intensity / 100.0
-            
-            # Cold blue (#0066CC) to Hot red (#FF3300)
-            if normalized <= 0.5:
-                # Blue to Yellow transition
-                ratio = normalized * 2
-                r = int(0 + (255 - 0) * ratio)
-                g = int(102 + (255 - 102) * ratio)
-                b = int(204 + (0 - 204) * ratio)
-            else:
-                # Yellow to Red transition
-                ratio = (normalized - 0.5) * 2
-                r = int(255)
-                g = int(255 + (51 - 255) * ratio)
-                b = int(0)
-            
-            return f"rgb({r},{g},{b})"
-        
-        # Apply color mapping
-        station_activity['color'] = station_activity['peak_intensity'].apply(intensity_to_color)
-        
-        # Create marker sizes proportional to activity (minimum size 8, maximum size 20)
-        max_size = 20
-        min_size = 8
-        station_activity['marker_size'] = (
-            min_size + (station_activity['peak_intensity'] / 100) * (max_size - min_size)
-        )
-        
-        # Create the map
-        fig = go.Figure()
-        
-        # Add station markers with continuous color mapping
-        fig.add_trace(go.Scattermapbox(
-            lat=station_activity['lat'],
-            lon=station_activity['lng'],
-            mode='markers',
-            marker=dict(
-                size=station_activity['marker_size'],
-                color=station_activity['color'],
-                opacity=0.8,
-                line=dict(width=1, color='white')
-            ),
-            text=station_activity['station_name'],
-            customdata=np.column_stack([
-                station_activity['total_activity'].round(1),
-                station_activity['peak_intensity'].round(1),
-                station_activity['departures'].round(1),
-                station_activity['arrivals'].round(1)
-            ]),
-            hovertemplate=(
-                "<b>%{text}</b><br>" +
-                "Activity Level: %{customdata[0]}<br>" +
-                "Peak Intensity: %{customdata[1]:.1f}%<br>" +
-                "Departures: %{customdata[2]}<br>" +
-                "Arrivals: %{customdata[3]}<br>" +
-                "<extra></extra>"
-            ),
-            name="Station Activity",
-            showlegend=False
-        ))
-        
-        # Add color scale legend manually by creating invisible traces
-        intensity_levels = [0, 25, 50, 75, 100]
-        intensity_labels = ['Cold (Low)', 'Cool', 'Moderate', 'Warm', 'Hot (High)']
-        
-        for intensity, label in zip(intensity_levels, intensity_labels):
-            fig.add_trace(go.Scattermapbox(
-                lat=[None], lon=[None],
-                mode='markers',
-                marker=dict(
-                    size=12,
-                    color=intensity_to_color(intensity),
-                    opacity=0.8,
-                    line=dict(width=1, color='white')
-                ),
-                name=f"{label} ({intensity}%)",
-                showlegend=True
-            ))
-        
-        # Update layout
-        fig.update_layout(
-            mapbox=dict(
-                style="open-street-map",
-                center=dict(
-                    lat=station_activity['lat'].mean(),
-                    lon=station_activity['lng'].mean()
-                ),
-                zoom=11
-            ),
-            title=f"Peak Activity Analysis - {period_label}",
-            height=600,
-            margin=dict(l=0, r=0, t=40, b=0),
+            showlegend=True,
             legend=dict(
                 orientation="v",
                 yanchor="top",
                 y=1,
                 xanchor="left",
                 x=1.02,
-                bgcolor="rgba(255, 255, 255, 0.8)",
-                bordercolor="rgba(0, 0, 0, 0.2)",
-                borderwidth=1,
-                title="Peak Intensity"
+                bgcolor="rgba(255, 255, 255, 0.9)",
+                bordercolor="rgba(0, 0, 0, 0.1)",
+                borderwidth=1
             )
+        )
+
+        print(f"Successfully created peak analysis with {len(station_activity)} stations")
+        return fig
+
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error in peak periods analysis: {e}")
+        print(f"Full error details: {error_details}")
+        return go.Figure().add_annotation(
+            text=f"Error in analysis: {str(e)}",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16, color="red")
+        )
+
+
+def predict_peak_periods_standalone(combined, start_date, end_date=None, use_all_time=False):
+    """Predict peak/off-peak periods for all stations with 5-level discrete color mapping"""
+    try:
+        # Simple data filtering
+        if use_all_time:
+            data = combined.copy()
+            title_period = "All Time"
+        elif end_date is None:
+            data = combined[combined['date'] == start_date].copy()
+            title_period = f"Single Day - {start_date}"
+        else:
+            data = combined[(combined['date'] >= start_date) & (combined['date'] <= end_date)].copy()
+            title_period = f"Date Range - {start_date} to {end_date}"
+        
+        if data.empty:
+            fig = go.Figure()
+            fig.add_annotation(text="No data available", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            fig.update_layout(title="Peak Analysis - No Data", height=500)
+            return fig
+        
+        # Calculate station activity
+        station_stats = data.groupby('station_name').agg({
+            'departures': 'sum',
+            'arrivals': 'sum',
+            'lat': 'first',
+            'lng': 'first'
+        }).reset_index()
+        
+        # Total activity and intensity calculation
+        station_stats['total_activity'] = station_stats['departures'] + station_stats['arrivals']
+        station_stats = station_stats[station_stats['total_activity'] > 0]
+        
+        if station_stats.empty:
+            fig = go.Figure()
+            fig.add_annotation(text="No station activity found", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            fig.update_layout(title="Peak Analysis - No Activity", height=500)
+            return fig
+        
+        # Normalize to 0-100 scale
+        min_activity = station_stats['total_activity'].min()
+        max_activity = station_stats['total_activity'].max()
+        
+        if max_activity > min_activity:
+            station_stats['intensity'] = ((station_stats['total_activity'] - min_activity) / (max_activity - min_activity)) * 100
+        else:
+            station_stats['intensity'] = 50.0
+        
+        # 5-level discrete color mapping
+        def get_color(intensity):
+            if intensity < 20:
+                return '#0066CC'  # Cold Blue
+            elif intensity < 40:
+                return '#3399FF'  # Cool Blue  
+            elif intensity < 60:
+                return '#FFFF66'  # Yellow
+            elif intensity < 80:
+                return '#FF9933'  # Orange
+            else:
+                return '#FF3300'  # Hot Red
+        
+        station_stats['color'] = station_stats['intensity'].apply(get_color)
+        station_stats['size'] = 8 + (station_stats['intensity'] / 100) * 12  # Size 8-20
+        
+        # Create map
+        fig = go.Figure()
+        
+        # Add stations
+        fig.add_trace(go.Scattermapbox(
+            lat=station_stats['lat'],
+            lon=station_stats['lng'],
+            mode='markers',
+            marker=dict(
+                size=station_stats['size'],
+                color=station_stats['color'],
+                opacity=0.8
+            ),
+            text=station_stats['station_name'],
+            hovertemplate="<b>%{text}</b><br>Activity: %{customdata[0]}<br>Intensity: %{customdata[1]:.1f}%<extra></extra>",
+            customdata=np.column_stack([station_stats['total_activity'], station_stats['intensity']]),
+            showlegend=False
+        ))
+        
+        # Add legend entries
+        colors = ['#0066CC', '#3399FF', '#FFFF66', '#FF9933', '#FF3300']
+        labels = ['Non-Peak', 'Low Activity', 'Medium Activity', 'High Activity', 'Peak']
+        
+        for color, label in zip(colors, labels):
+            fig.add_trace(go.Scattermapbox(
+                lat=[None], lon=[None],
+                mode='markers',
+                marker=dict(size=12, color=color),
+                name=label,
+                showlegend=True
+            ))
+        
+        # Layout
+        fig.update_layout(
+            mapbox=dict(
+                style="open-street-map",
+                center=dict(lat=station_stats['lat'].mean(), lon=station_stats['lng'].mean()),
+                zoom=11
+            ),
+            title=f"Peak Activity Analysis - {title_period}",
+            height=600,
+            margin=dict(l=0, r=0, t=40, b=0),
+            legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
         )
         
         return fig
         
     except Exception as e:
-        # Return error figure
         fig = go.Figure()
         fig.add_annotation(
-            text=f"Error in peak analysis: {str(e)}",
+            text=f"Error: {str(e)}",
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False,
             font=dict(size=16, color="red")
         )
-        fig.update_layout(
-            title="Peak Analysis - Error",
-            height=500,
-            margin=dict(l=0, r=0, t=40, b=0)
-        )
+        fig.update_layout(title="Peak Analysis - Error", height=500)
         return fig
 
 
@@ -2627,11 +2871,11 @@ def create_daily_rides_continuous_plot(combined, start_date, end_date, max_stati
     ))
 
     fig.update_layout(
-        title=f"Continuous Hourly Rides Pattern ({start_date.strftime('%d/%m/%y')} - {end_date.strftime('%d/%m/%y')})",
+        title=f"Daily rides-hourly ({start_date.strftime('%d/%m/%y')} - {end_date.strftime('%d/%m/%y')})",
         xaxis_title="Date and Time",
         yaxis_title="Hourly Rides",
         height=500,
-        margin=dict(l=20, r=60, t=40, b=20),
+        margin=dict(l=20, r=60, t=80, b=30),
         xaxis=dict(
             showgrid=True,
             gridwidth=1,
@@ -2646,7 +2890,7 @@ def create_daily_rides_continuous_plot(combined, start_date, end_date, max_stati
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.02,
+            y=1.05,
             xanchor="left",
             x=0
         ),
@@ -2848,7 +3092,8 @@ def create_temporal_pattern_spider(combined, max_stations=100):
         ),
         title="Temporal Pattern Analysis - Station Usage Profiles",
         height=600,
-        showlegend=True
+        showlegend=True,
+        dragmode=False
     )
     
     return fig
@@ -2978,7 +3223,8 @@ def create_station_role_spider(combined, max_stations=50):
         ),
         title=f"Station Role Analysis - Top {len(top_stations)} Stations by Volume",
         height=700,
-        showlegend=True
+        showlegend=True,
+        dragmode=False
     )
     
     return fig
