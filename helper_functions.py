@@ -154,7 +154,6 @@ def load_processed_data(max_stations=None, use_test_data=False):
     # Limit to specified number of random stations for performance
     if len(all_stations) > max_stations:
         selected_stations = pd.Series(list(all_stations)).sample(n=max_stations, random_state=42).tolist()
-        st.info(f"📊 Limited to {max_stations} stations for optimal performance (out of {len(all_stations)} available)")
     else:
         selected_stations = list(all_stations)
     
@@ -187,7 +186,6 @@ def prepare_geodata_and_weights(full_df, max_stations=None):
     # Ensure we don't exceed the specified maximum for performance
     if len(unique_stations) > max_stations:
         unique_stations = unique_stations.sample(n=max_stations, random_state=42)
-        st.info(f"📊 Limited to {max_stations} stations for optimal performance")
 
     g = gpd.GeoDataFrame(
         unique_stations[['station_name', 'lat', 'lng']],
@@ -223,9 +221,9 @@ def prepare_geodata_and_weights(full_df, max_stations=None):
 
 
 @st.cache_data
-def prepare_daily_time_series_data(combined, selected_month, max_stations=None):
+def prepare_daily_time_series_data(combined, start_date, end_date, max_stations=None):
     """
-    Prepare daily time series data for a specific month
+    Prepare daily time series data for a specific date range
     """
     if combined is None or combined.empty:
         return pd.DataFrame(), pd.DataFrame(), []
@@ -233,23 +231,23 @@ def prepare_daily_time_series_data(combined, selected_month, max_stations=None):
     df2 = combined.copy()
     df2['date'] = pd.to_datetime(df2['date'])
 
-    # Filter by selected month
-    month_data = df2[df2['date'].dt.to_period('M') == selected_month]
+    # Filter by date range
+    date_data = df2[(df2['date'].dt.date >= start_date) & (df2['date'].dt.date <= end_date)]
 
-    if month_data.empty:
+    if date_data.empty:
         return pd.DataFrame(), pd.DataFrame(), []
     
     # Limit stations for performance using utility function
-    month_data = limit_stations_for_performance(month_data, max_stations)
+    date_data = limit_stations_for_performance(date_data, max_stations)
 
-    # Get all days in the month
-    days_in_month = sorted(month_data['date'].dt.date.unique())
+    # Get all days in the date range
+    days_in_range = sorted(date_data['date'].dt.date.unique())
 
     series_list = []
     day_info = []
 
-    for day in days_in_month:
-        day_data = month_data[month_data['date'].dt.date == day]
+    for day in days_in_range:
+        day_data = date_data[date_data['date'].dt.date == day]
 
         if not day_data.empty:
             # Aggregate by station for this day
@@ -1260,7 +1258,7 @@ def create_parallel_coordinates_plot(combined):
         ))
         
         fig.update_layout(
-            title="Station Characteristics Analysis",
+            title="",
             height=600,
             margin=dict(l=80, r=80, t=60, b=40)
         )
@@ -1422,7 +1420,7 @@ def create_spider_glyph_month(combined):
                 mode='markers',
                 marker=dict(size=4, color=station['color']),
                 text=station['station_name'],
-                hovertemplate=f"<b>%{{text}}</b><br>Total Rides: {station['total_rides']}<br>Month: {station['month']}<br>Net Balance: {station['net_balance']}<extra></extra>",
+                hovertemplate=f"<b>{station['station_name']}</b><br>Total Rides: {station['total_rides']}<br>Month: {station['month']}<br>Net Balance: {station['net_balance']}<extra></extra>",
                 showlegend=False
             ))
 
@@ -1617,7 +1615,6 @@ def create_time_wheel_plot(combined, selected_week=None):
                     f"<b>{day_names[day_idx]}</b><br>" +
                     "Hour: %{customdata[0]:02d}:00<br>" +
                     "Activity Level: %{customdata[1]:.0f} rides<br>" +
-                    "Radius Position: %{r:.1f}<br>" +
                     "<extra></extra>"
                 ),
                 customdata=list(zip(day_data['hour'], day_data['rides_this_hour']))
@@ -2190,7 +2187,7 @@ def create_spider_glyph_activity_density(combined):
                 mode='markers',
                 marker=dict(size=4, color=station['color']),
                 text=station['station_name'],
-                hovertemplate=f"<b>%{{text}}</b><br>Total Rides: {station['total_rides']}<br>Activity Density: {station['activity_density']:.1f} rides/day<br>Net Balance: {station['net_balance']}<extra></extra>",
+                hovertemplate=f"<b>{station['station_name']}</b><br>Total Rides: {station['total_rides']}<br>Activity Density: {station['activity_density']:.1f} rides/day<br>Net Balance: {station['net_balance']}<extra></extra>",
                 showlegend=False
             ))
 
@@ -2205,7 +2202,7 @@ def create_spider_glyph_activity_density(combined):
                        showlegend=True))
 
         fig.update_layout(
-            title="Spider Glyph: Activity Density vs Total Rides",
+            title="Activity Density vs Total Rides",
             xaxis_title="Total Rides (All Months)",
             yaxis_title="Activity Density (Rides per Day)",
             height=600,
@@ -2344,7 +2341,7 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
         y_buffer = (y_max - y_min) * 0.1
 
         fig.update_layout(
-            title=f"ARIMA Forecast - {selected_station} (Using Past {len(recent_data)} Days - More Data = Narrower CI)",
+            title=f"{selected_station}",
             xaxis_title="Date",
             yaxis_title="Net Balance",
             height=500,
@@ -2369,10 +2366,7 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
             )
         )
 
-        return fig, (
-            f"ARIMA forecast successful for {forecast_days} days "
-            f"(trained on {train_start} → {train_end}, {len(recent_data)} days)"
-        )
+        return fig, ""
 
     except Exception as e:
         return fig, f"ARIMA forecast failed: {str(e)}"
@@ -2541,7 +2535,6 @@ def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False
             text=station_activity['station_name'],
             customdata=np.column_stack((
                 station_activity[activity_col].round(1),
-                station_activity['peak_intensity'].round(3),
                 station_activity['departures'],
                 station_activity['arrivals'],
                 station_activity['category']
@@ -2549,10 +2542,9 @@ def predict_peak_periods(combined, start_date, end_date=None, use_all_time=False
             hovertemplate=(
                 "<b>%{text}</b><br>" +
                 f"{activity_label}: %{{customdata[0]}}<br>" +
-                "Peak Intensity: %{customdata[1]:.1%}<br>" +
-                "Category: %{customdata[4]}<br>" +
-                "Departures: %{customdata[2]}<br>" +
-                "Arrivals: %{customdata[3]}<br>" +
+                "Category: %{customdata[3]}<br>" +
+                "Departures: %{customdata[1]}<br>" +
+                "Arrivals: %{customdata[2]}<br>" +
                 "<extra></extra>"
             ),
             showlegend=False
@@ -2716,8 +2708,8 @@ def predict_peak_periods_standalone(combined, start_date, end_date=None, use_all
                 opacity=0.8
             ),
             text=station_stats['station_name'],
-            hovertemplate="<b>%{text}</b><br>Activity: %{customdata[0]}<br>Intensity: %{customdata[1]:.1f}%<extra></extra>",
-            customdata=np.column_stack([station_stats['total_activity'], station_stats['intensity']]),
+            hovertemplate="<b>%{text}</b><br>Activity: %{customdata[0]}<extra></extra>",
+            customdata=station_stats['total_activity'],
             showlegend=False
         ))
         
@@ -2958,7 +2950,7 @@ def create_daily_rides_continuous_plot(combined, start_date, end_date, max_stati
     ))
 
     fig.update_layout(
-        title=f"Daily rides-hourly ({start_date.strftime('%d/%m/%y')} - {end_date.strftime('%d/%m/%y')})",
+        title=f"({start_date.strftime('%d/%m/%y')} - {end_date.strftime('%d/%m/%y')})",
         xaxis_title="Date and Time",
         yaxis_title="Hourly Rides",
         height=500,

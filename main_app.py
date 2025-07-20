@@ -79,16 +79,16 @@ def main():
 
     # Map mode selection
     st.sidebar.header("Map Mode")
-    mode = st.sidebar.radio("Choose view:", ["Main Map", "Timeline Map", "Models Map"])
+    mode = st.sidebar.radio("Choose view:", ["Main Map", "Timeline", "Models"])
     if mode == "Main Map":
         # Main Map with date picker above it
         sel_date = st.date_input("Select Date:", value=dates[0], min_value=dates[0], max_value=dates[-1])
 
         # 1. STATION ACTIVITY MAP
         st.header("Station Activity Map")
-        
+
         # Map Settings
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 2])
         with col1:
             radius_m = st.slider("Radius (m):", 100, 200, 100, 10, key="main_map_radius")
         with col2:
@@ -97,6 +97,8 @@ def main():
             show_arr = st.checkbox("More arrivals", True, key="main_map_arr")
         with col4:
             show_bal = st.checkbox("Balanced", True, key="main_map_bal")
+        with col5:
+            pass  # Empty space
 
         categories = [
             name for name, chk in zip(
@@ -121,8 +123,7 @@ def main():
 
         # 2. DAILY RIDES OVERVIEW
         st.header("Daily Rides Overview")
-        st.write("Shows total bike rides and patterns over time with simulated hourly granularity")
-        
+
         # Add some spacing
         st.markdown("")
         st.markdown("")
@@ -130,7 +131,7 @@ def main():
         # Chart type selection
         chart_type = st.radio(
             "Select chart type:",
-            ["Continuous Time Series (Hourly)", "Daily Bar Chart"],
+            ["Hourly plot", "Daily Bar Chart"],
             horizontal=True
         )
         
@@ -152,7 +153,7 @@ def main():
             )
         
         if overview_start <= overview_end:
-            if chart_type == "Continuous Time Series (Hourly)":
+            if chart_type == "Hourly plot":
                 daily_chart = create_daily_rides_continuous_plot(
                     combined, 
                     overview_start, 
@@ -175,30 +176,11 @@ def main():
         render_daily_time_series_section(combined, st.session_state)
 
         # 4. IMPROVED SPIDER GLYPH ANALYSIS
-        st.header("Improved Spider Glyph Analysis")
-        st.markdown("### Improved Spider Glyph Analysis")
-        st.markdown("""
-        **Better spider glyphs designed specifically for bike share insights:**
-        - **Temporal Patterns**: Rush hour intensity, weekend vs weekday patterns
-        - **Station Roles**: Departure hubs, arrival destinations, balanced stations
-        """)
+        st.header("Spider Glyph Analysis")
+
         
         # Temporal Pattern Spider
         st.subheader("Temporal Usage Patterns")
-        with st.expander("How to read temporal patterns", expanded=False):
-            st.markdown("""
-            **🕷️ This spider shows station usage patterns grouped by activity level:**
-            - **Rush Hour Intensity**: How much stations favor departure vs arrival times
-            - **Midday Activity**: Overall activity during non-peak hours
-            - **Weekend vs Weekday**: Ratio showing leisure vs commuter usage
-            - **Night Activity**: Base level activity during low-demand periods
-            - **Seasonal Variation**: How much patterns change across months
-            
-            **🎨 Colors represent station activity levels:**
-            - **🔴 Red**: High-activity stations (busy hubs)
-            - **🟠 Orange**: Medium-activity stations (neighborhood stations)
-            - **🔵 Blue**: Low-activity stations (peripheral locations)
-            """)
         
         try:
             temporal_spider = create_temporal_pattern_spider(combined, max_stations=st.session_state.max_stations_complex_viz)
@@ -211,20 +193,6 @@ def main():
         
         # Station Role Spider
         st.subheader("Station Role Analysis")
-        with st.expander("How to read station roles", expanded=False):
-            st.markdown("""
-            **📊 This spider identifies different station roles in the bike share system:**
-            - **Departure Hub Score**: 0 = arrival destination, 1 = departure hub
-            - **Peak Hour Dominance**: How much activity concentrates in rush hours
-            - **Consistency Score**: How predictable daily patterns are
-            - **Volume Level**: Overall traffic level compared to other stations
-            - **Balance Score**: How well-balanced arrivals and departures are
-            
-            **🔍 Use this to identify:**
-            - **Departure Hubs**: Residential areas, transit stations
-            - **Arrival Destinations**: Business districts, tourist areas
-            - **Balanced Stations**: Mixed-use areas, transfer points
-            """)
         
         try:
             role_spider = create_station_role_spider(combined, max_stations=10)
@@ -235,53 +203,28 @@ def main():
         except Exception as e:
             st.error(f"Error creating station role spider: {e}")
 
-        # 5. REORGANIZED SPIDER PLOTS
-        st.header("Spider Glyph Visualizations")
-        # Y-axis selection
-        y_axis_option = st.selectbox(
-            "Choose Y-axis for Spider Glyph:",
-            ["Month", "Distance from Manhattan", "Balance Ratio", "Activity Density"],
-            help="Different Y-axis options provide different insights into station characteristics"
-        )
+        # 5. STATION ANALYSIS PLOTS
+        st.header("Station Analysis Plots")
+        # Tab selection for station analysis plots
+        tab1, tab2 = st.tabs(["Monthly Spider Glyph", "Activity Scatter Plot"])
         
-        if y_axis_option == "Month":
-            st.subheader("📅 Spider Glyph by Month")
+        with tab1:
             try:
                 spider_fig = create_spider_glyph_month(combined)
                 st.plotly_chart(spider_fig, use_container_width=True)
-                st.info("Y-axis shows normalized month mapping with improved scaling for better readability")
             except Exception as e:
                 st.error(f"Error creating month spider glyph: {e}")
             
-        elif y_axis_option == "Distance from Manhattan":
-            st.subheader("📍 Spider Glyph by Distance from Manhattan")
+        with tab2:
             try:
-                spider_fig = create_spider_glyph_distance(combined)
-                st.plotly_chart(spider_fig, use_container_width=True)
-                st.info("Y-axis shows distance in kilometers from Manhattan center (Times Square)")
+                scatter_fig = create_spider_glyph_activity_density(combined)
+                st.plotly_chart(scatter_fig, use_container_width=True)
             except Exception as e:
-                st.error(f"Error creating distance spider glyph: {e}")
-            
-        elif y_axis_option == "Balance Ratio":
-            st.subheader("⚖️ Spider Glyph by Balance Ratio")
-            try:
-                spider_fig = create_spider_glyph_balance_ratio(combined)
-                st.plotly_chart(spider_fig, use_container_width=True)
-                st.info("Y-axis shows departure/arrival balance ratio. Values >1 indicate more departures than arrivals")
-            except Exception as e:
-                st.error(f"Error creating balance ratio spider glyph: {e}")
-            
-        elif y_axis_option == "Activity Density":
-            st.subheader("🚀 Spider Glyph by Activity Density")
-            try:
-                spider_fig = create_spider_glyph_activity_density(combined)
-                st.plotly_chart(spider_fig, use_container_width=True)
-                st.info("Y-axis shows average rides per day, indicating how busy each station is")
-            except Exception as e:
-                st.error(f"Error creating activity density spider glyph: {e}")
+                st.error(f"Error creating activity scatter plot: {e}")
                 
         # 6. CYCLIC TIME WHEEL (Separate Plot)
-        st.header("Cyclic Time Wheel Visualization")
+        st.header("pattern over time daily - Cyclic Time Wheel")
+        
         if combined is not None and not combined.empty:
             combined_temp = combined.copy()
             combined_temp['date'] = pd.to_datetime(combined_temp['date'])
@@ -301,124 +244,70 @@ def main():
                 else:
                     time_wheel_fig = create_time_wheel_plot(filtered)
                     st.plotly_chart(time_wheel_fig, use_container_width=True)
-                    st.info(f"Polar plot showing activity patterns for {date_range[0]} to {date_range[-1]} (7 days). Bubbles show activity levels. Legend shows date and day of week.")
-                    with st.expander("How to read the Cyclic Time Plot", expanded=False):
-                        st.markdown("""
-                        Cyclic Time Interpretation:
-                        - Angle (Clock Position): Hour of day (12 o'clock = midnight, 3 o'clock = 6am, etc.)
-                        - Distance from Center: Day of week (inner = Monday, outer = Sunday)
-                        - Bubble Size: Relative activity level at that specific hour/day combination
-                        - Colors/Legend: Each trace labeled with the actual date and day of week
-                        """)
             else:
                 st.warning("No date data available")
         else:
             st.warning("No data available for cyclic time wheel.")
 
-        # 6. TOMINSKI TIME WHEEL PLOT
-        st.header("🕰️ Tominski Time Wheel")
-        st.markdown("""
-        **Multi-scale temporal visualization combining hours, days, and months in a single circular plot.**
-        
-        This advanced time wheel shows:
-        - **Inner rings**: Different months and quarters
-        - **Outer rings**: Days of the week variations
-        - **Angular position**: Hours of the day (24-hour cycle)
-        - **Point size**: Activity intensity at that specific time
-        """)
-        
-        try:
-            tominski_fig = create_tominski_time_wheel(combined)
-            st.plotly_chart(tominski_fig, use_container_width=True)
-            with st.expander("ℹ️ How to read the Tominski Time Wheel", expanded=False):
-                st.markdown("""
-                **🕰️ Multi-Scale Time Wheel Reading Guide:**
-                - **Center to Edge**: Represents temporal hierarchy (months → days → hours)
-                - **Angle (0° = Top)**: Hour of day (clockwise from midnight)
-                - **Radius Rings**: Different months and day-of-week combinations
-                - **Marker Size**: Activity intensity at that specific time
-                - **Colors**: Different months for seasonal comparison
-                
-                **🎯 What This Reveals:**
-                - **Seasonal Patterns**: How activity changes across months
-                - **Weekly Cycles**: Differences between weekdays and weekends
-                - **Daily Rhythms**: Peak hours and quiet periods
-                - **Multi-Scale Interactions**: How different time scales influence each other
-                """)
-        except Exception as e:
-            st.error(f"Error creating Tominski time wheel: {e}")
-
         # 6. PARALLEL COORDINATES PLOT
-        st.header("📊 Parallel Coordinates Analysis")
-        st.markdown("""
-        **Multi-dimensional analysis showing relationships between different station characteristics.**
-        
-        This visualization reveals:
-        - **Station Profiles**: How different metrics relate to each other
-        - **Cluster Patterns**: Groups of stations with similar characteristics
-        - **Trade-offs**: Relationships between activity, balance, and location
-        - **Outliers**: Stations with unusual characteristic combinations
-        """)
+        st.header("Multi-Dimensional Station Analysis")
         
         try:
             parallel_fig = create_parallel_coordinates_plot(combined)
             st.plotly_chart(parallel_fig, use_container_width=True)
-            with st.expander("ℹ️ How to read the Parallel Coordinates", expanded=False):
-                st.markdown("""
-                **📊 Parallel Coordinates Reading Guide:**
-                - **Each Line**: Represents one station across all metrics
-                - **Vertical Axes**: Different station characteristics (activity, balance, etc.)
-                - **Line Color**: Activity level (purple = low, yellow = high)
-                - **Line Patterns**: Show relationships between metrics
-                
-                **🔍 What to Look For:**
-                - **Parallel Lines**: Stations with similar profiles
-                - **Converging Lines**: Strong correlations between metrics
-                - **Diverging Lines**: Trade-offs between characteristics
-                - **Outlier Lines**: Stations with unique combinations
-                
-                **🎯 Interactive Features:**
-                - **Brush Selection**: Click and drag on any axis to filter
-                - **Multi-Selection**: Select ranges on multiple axes simultaneously
-                - **Pattern Discovery**: Find stations matching specific criteria
-                """)
         except Exception as e:
             st.error(f"Error creating parallel coordinates plot: {e}")
 
-    elif mode == "Timeline Map":
+        # 7. TOMINSKI TIME WHEEL PLOT
+        st.header("Tominski Time Wheel")
+        
+        try:
+            tominski_fig = create_tominski_time_wheel(combined)
+            st.plotly_chart(tominski_fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error creating Tominski time wheel: {e}")
+
+    elif mode == "Timeline":
         render_timeline_mode(combined, dates, st.session_state)
     
-    elif mode == "Models Map":
+    elif mode == "Models":
         render_models_map_mode(combined, dates, st.session_state)
 
 
 def render_daily_time_series_section(combined, session_state):
     """Render the daily time series clustering section"""
-    st.subheader("Daily Time Series Clustering")
-
-    # Month selection dropdown
-    col1, col2 = st.columns([2, 1])
+    # Date range selection
+    dates = sorted(pd.to_datetime(combined["date"]).dt.date.unique())
+    
+    col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        # Get available months from the data
-        available_months = sorted(pd.to_datetime(combined['date']).dt.to_period('M').unique())
-        month_options = {str(month): month.strftime('%B %Y') for month in available_months}
-
-        selected_month_str = st.selectbox(
-            "Select Month:",
-            options=list(month_options.keys()),
-            format_func=lambda x: month_options[x],
-            key="month_select"
+        start_date = st.date_input(
+            "Start Date:",
+            value=dates[0],
+            min_value=dates[0],
+            max_value=dates[-1],
+            key="ts_start_date"
         )
-        selected_month = pd.Period(selected_month_str)
-
     with col2:
+        end_date = st.date_input(
+            "End Date:",
+            value=min(dates[0] + datetime.timedelta(days=14), dates[-1]),
+            min_value=dates[0],
+            max_value=dates[-1],
+            key="ts_end_date"
+        )
+    with col3:
         ts_k = st.selectbox("Clusters:", list(range(1, 7)), index=2, key="ts_k")
 
-    # Prepare daily time series data for selected month
-    pivot_daily, coords, day_info = prepare_daily_time_series_data(combined, selected_month, max_stations=session_state.max_stations_complex_viz)
+    if start_date > end_date:
+        st.error("Start date must be before or equal to end date")
+        return
+
+    # Prepare daily time series data for selected date range
+    pivot_daily, coords, day_info = prepare_daily_time_series_data(combined, start_date, end_date, max_stations=session_state.max_stations_complex_viz)
 
     if not pivot_daily.empty and day_info:
-        # Display the selected month info
+        # Display the selected date range info
         start_day = day_info[0]['date'].strftime('%d/%m/%y')
         end_day = day_info[-1]['date'].strftime('%d/%m/%y')
         st.write(f"**Analyzing daily patterns: {start_day} - {end_day}** ({len(day_info)} days)")
@@ -430,13 +319,14 @@ def render_daily_time_series_section(combined, session_state):
         st.plotly_chart(create_time_series_cluster_map(ts_res), use_container_width=True)
 
         # Show cluster characteristics
-        render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, selected_month_str, combined)
+        date_range_str = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}"
+        render_cluster_analysis(ts_res, pivot_daily, day_info, date_range_str, combined)
 
     else:
-        st.warning(f"No data available for {month_options.get(selected_month_str, 'selected month')}.")
+        st.warning(f"No data available for the selected date range.")
 
 
-def render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, selected_month_str, combined):
+def render_cluster_analysis(ts_res, pivot_daily, day_info, date_range_str, combined):
     """Render detailed cluster analysis section"""
 
     if not ts_res.empty and len(pivot_daily.columns) > 0:
@@ -462,13 +352,14 @@ def render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, select
                 })
 
         # 1. Cluster Data Distribution - Combined Whisker Plot
-        render_cluster_distribution_plot(cluster_data, month_options, selected_month_str, colors)
+        st.subheader("Cluster Data Distribution")
+
+        render_cluster_distribution_plot(cluster_data, date_range_str, colors)
 
         # 2. Daily Patterns with Trend Lines (Z-Score only)
-        render_daily_patterns_plot(cluster_data, day_labels, month_options, selected_month_str, colors)
-
-        # 3. Cluster Statistics and Insights (centered)
-        render_cluster_statistics(cluster_data)
+        st.subheader("Daily Usage Patterns")
+   
+        render_daily_patterns_plot(cluster_data, day_labels, date_range_str, colors)
 
     else:
         # Show basic cluster summary if no time series data
@@ -476,7 +367,7 @@ def render_cluster_analysis(ts_res, pivot_daily, day_info, month_options, select
         st.dataframe(cluster_summary, use_container_width=True)
 
 
-def render_cluster_distribution_plot(cluster_data, month_options, selected_month_str, colors):
+def render_cluster_distribution_plot(cluster_data, date_range_str, colors):
     """Render cluster data distribution whisker plot"""
     fig_whisker = go.Figure()
 
@@ -495,7 +386,7 @@ def render_cluster_distribution_plot(cluster_data, month_options, selected_month
         ))
 
     fig_whisker.update_layout(
-        title=f"Cluster Data Distribution - {month_options[selected_month_str]}",
+        title=f"Cluster Data Distribution - {date_range_str}",
         yaxis_title="Net Balance",
         xaxis_title="Cluster",
         height=400,
@@ -504,7 +395,7 @@ def render_cluster_distribution_plot(cluster_data, month_options, selected_month
     st.plotly_chart(fig_whisker, use_container_width=True)
 
 
-def render_daily_patterns_plot(cluster_data, day_labels, month_options, selected_month_str, colors):
+def render_daily_patterns_plot(cluster_data, day_labels, date_range_str, colors):
     """Render daily patterns with Z-Score normalization"""
     fig_patterns = go.Figure()
 
@@ -562,7 +453,7 @@ def render_daily_patterns_plot(cluster_data, day_labels, month_options, selected
         ))
 
     fig_patterns.update_layout(
-        title=f"Daily Net Balance Patterns - {month_options[selected_month_str]}",
+        title=f"Daily Net Balance Patterns - {date_range_str}",
         xaxis_title="Day (DD/MM)",
         yaxis_title="Z-Score Normalized Net Balance",
         height=500,
@@ -572,69 +463,11 @@ def render_daily_patterns_plot(cluster_data, day_labels, month_options, selected
     st.plotly_chart(fig_patterns, use_container_width=True)
 
 
-def render_cluster_statistics(cluster_data):
-    """Render cluster statistics and insights"""
-    # Center the statistics table
-    col1, col2, col3 = st.columns([1, 2, 1])
-
-    with col2:
-        # Cluster summary statistics
-        summary_data = []
-        for cluster_info in cluster_data:
-            avg_pattern = cluster_info['pattern']
-            summary_data.append({
-                'Cluster': cluster_info['cluster'],
-                'Stations': cluster_info['stations'],
-                'Avg Net Balance': f"{np.mean(avg_pattern):.1f}",
-                'Volatility (Std)': f"{np.std(avg_pattern):.1f}",
-                'Max Daily': f"{np.max(avg_pattern):.1f}",
-                'Min Daily': f"{np.min(avg_pattern):.1f}"
-            })
-
-        summary_df = pd.DataFrame(summary_data)
-        st.dataframe(summary_df, use_container_width=True)
-
-    # Cluster insights
-    insights_cols = st.columns(len(cluster_data))
-    for i, cluster_info in enumerate(cluster_data):
-        with insights_cols[i]:
-            avg_pattern = cluster_info['pattern']
-            avg_net = np.mean(avg_pattern)
-            volatility = np.std(avg_pattern)
-            
-            if avg_net > 10:
-                pattern_type = "🔴 Departure Hub"
-            elif avg_net < -10:
-                pattern_type = "🟢 Arrival Hub"
-            else:
-                pattern_type = "🔵 Balanced"
-            
-            stability = "📈 Volatile" if volatility > 50 else "📊 Stable"
-            
-            st.metric(
-                label=f"Cluster {cluster_info['cluster']}",
-                value=f"{cluster_info['stations']} stations",
-                delta=f"{avg_net:.1f} avg balance"
-            )
-            st.write(f"**{pattern_type}**")
-            st.write(f"**{stability}**")
-
-
 def render_timeline_mode(combined, dates, session_state):
     """Render the timeline mode interface"""
-    # Timeline mode controls
+    # Timeline mode controls in sidebar (radius only)
     st.sidebar.header("Timeline Options")
     radius_m = st.sidebar.slider("Clustering radius (m):", 100, 200, 100, 10, key="timeline_radius")
-    show_dep = st.sidebar.checkbox("More departures", True, key="timeline_dep")
-    show_arr = st.sidebar.checkbox("More arrivals", True, key="timeline_arr")
-    show_bal = st.sidebar.checkbox("Balanced", True, key="timeline_bal")
-
-    categories = [
-        name for name, chk in zip(
-            ["More departures", "More arrivals", "Balanced"],
-            [show_dep, show_arr, show_bal]
-        ) if chk
-    ]
 
     st.sidebar.header("Select Date Range")
     start_date = st.sidebar.date_input("Start date:", value=dates[0], min_value=dates[0], max_value=dates[-1])
@@ -645,6 +478,24 @@ def render_timeline_mode(combined, dates, session_state):
     if start_date > end_date:
         st.error("Start date must be before end date.")
         return
+
+    # Station category controls above the map
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
+    with col1:
+        show_dep = st.checkbox("More departures", True, key="timeline_dep")
+    with col2:
+        show_arr = st.checkbox("More arrivals", True, key="timeline_arr")
+    with col3:
+        show_bal = st.checkbox("Balanced", True, key="timeline_bal")
+    with col4:
+        pass  # Empty space
+
+    categories = [
+        name for name, chk in zip(
+            ["More departures", "More arrivals", "Balanced"],
+            [show_dep, show_arr, show_bal]
+        ) if chk
+    ]
 
     # 1) Animated Timeline Map
     st.subheader(f"Timeline Map — {start_date.strftime('%d/%m/%y')} to {end_date.strftime('%d/%m/%y')}")
@@ -665,7 +516,7 @@ def render_timeline_mode(combined, dates, session_state):
 
 def render_models_map_mode(combined, dates, session_state):
     """Render the advanced models map interface - showing all models together"""
-    st.subheader("Advanced Analytics Models")
+    st.subheader(" Analytics Models")
     
     # Initialize analysis_date with a default value
     analysis_date = dates[0] if dates else date.today()
@@ -673,7 +524,7 @@ def render_models_map_mode(combined, dates, session_state):
     # ═══════════════════════════════════════════════════════════════════════════════
     # STATION SELECTION MAP
     # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader("🗺️ Select Station from Map")
+    st.subheader("Select Station from Map")
 
     # Create station selection map
     available_stations = sorted(combined['station_name'].unique())
@@ -683,27 +534,27 @@ def render_models_map_mode(combined, dates, session_state):
     if 'selected_station_models' not in st.session_state:
         st.session_state.selected_station_models = available_stations[0]
 
-    # Create interactive station selection map
+    # Create station selection map (simplified)
     fig_station_map = go.Figure()
 
-    # Add all stations to the map with more subtle styling
+    # Add all stations to the map
     fig_station_map.add_trace(go.Scattermapbox(
         lat=station_coords['lat'],
         lon=station_coords['lng'],
         mode='markers',
         marker=dict(
             size=6,
-            color='rgba(70, 130, 180, 0.6)',  # Steel blue with transparency
+            color='black',
             opacity=0.8
         ),
         text=station_coords['station_name'],
-        hovertemplate="<b>%{text}</b><br>Click to select<extra></extra>",
+        customdata=station_coords['station_name'],
+        hovertemplate="<b>%{text}</b><br>Click to select this station<extra></extra>",
         name="Available Stations",
-        showlegend=False,
-        customdata=station_coords['station_name']  # Store station names for click events
+        showlegend=False
     ))
 
-    # Highlight selected station with more prominent but not overwhelming styling
+    # Highlight selected station
     if st.session_state.selected_station_models in station_coords['station_name'].values:
         selected_coords = station_coords[station_coords['station_name'] == st.session_state.selected_station_models]
         if not selected_coords.empty:
@@ -730,23 +581,32 @@ def render_models_map_mode(combined, dates, session_state):
         ),
         height=450,
         margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False  # Hide legend for cleaner look
+        showlegend=False
     )
 
-    # Display the map and capture click events
-    map_click = st.plotly_chart(
-        fig_station_map,
-        use_container_width=True,
-        key="station_selection_map",
-        on_select="rerun"
-    )
-
-    # Handle map click events
-    if map_click and map_click.get('selection') and map_click['selection'].get('points'):
-        clicked_points = map_click['selection']['points']
-        if clicked_points:
-            clicked_station = clicked_points[0].get('customdata')
-            if clicked_station and clicked_station != st.session_state.selected_station_models:
+    # Display the interactive map
+    selected_points = st.plotly_chart(fig_station_map, use_container_width=True, key="station_selection_map", on_select="rerun")
+    
+    # Handle map click selection - more robust handling
+    if selected_points and hasattr(selected_points, 'selection') and selected_points.selection:
+        if selected_points.selection.get('points'):
+            clicked_point = selected_points.selection['points'][0]
+            
+            # Try different ways to get the point index
+            point_index = None
+            if 'pointIndex' in clicked_point:
+                point_index = clicked_point['pointIndex']
+            elif 'point_index' in clicked_point:
+                point_index = clicked_point['point_index']
+            elif 'customdata' in clicked_point:
+                # If we stored station name in customdata
+                clicked_station = clicked_point['customdata']
+                if clicked_station in available_stations:
+                    st.session_state.selected_station_models = clicked_station
+                    st.rerun()
+            
+            if point_index is not None and point_index < len(station_coords):
+                clicked_station = station_coords.iloc[point_index]['station_name']
                 st.session_state.selected_station_models = clicked_station
                 st.rerun()
 
@@ -759,8 +619,7 @@ def render_models_map_mode(combined, dates, session_state):
             available_stations,
             index=available_stations.index(
                 st.session_state.selected_station_models) if st.session_state.selected_station_models in available_stations else 0,
-            key="station_dropdown",
-            help="Choose a station for forecasting analysis"
+            key="station_dropdown"
         )
 
         # Update session state if dropdown changes
@@ -775,39 +634,44 @@ def render_models_map_mode(combined, dates, session_state):
         # Show station coordinates
         if st.session_state.selected_station_models in station_coords['station_name'].values:
             coords = station_coords[station_coords['station_name'] == st.session_state.selected_station_models].iloc[0]
-            st.caption(f"📍 {coords['lat']:.4f}, {coords['lng']:.4f}")
-
-    # Improved usage instructions
-    st.info(
-        "💡 **How to select a station:** Use the dropdown menu above or click on any station marker in the map. The selected station will be highlighted in red.")
+            st.caption(f"Location: {coords['lat']:.4f}, {coords['lng']:.4f}")
 
     selected_station = st.session_state.selected_station_models
 
     st.markdown("---")
 
-    # Global settings in sidebar
-    st.sidebar.header("Global Settings")
-
-    # Anomaly detection settings
-    z_threshold = st.sidebar.slider("Z-Score Threshold (Anomaly Detection):", 1.5, 4.0, 2.5, 0.1)
-
     # ═══════════════════════════════════════════════════════════════════════════════
     # 1. ARIMA FORECAST
     # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader("🔮 ARIMA Forecast")
+    st.subheader("ARIMA Forecast")
+
 
     # Forecast days control moved to main area
-    col1, col2 = st.columns([1, 3])
+    col1, col2, col3 = st.columns([1, 1.5, 1.5])
     with col1:
         forecast_days_arima = st.slider("Forecast Days:", 3, 14, 7, key="arima_days")
     with col2:
-        st.write(f"**Station:** {selected_station}")
+        selected_info = f"**Selected Station:**\n{selected_station}"
+        st.success(selected_info)
+    with col3:
+        pass  # Empty column for spacing
 
     with st.spinner("Running ARIMA model..."):
         try:
-            fig_arima, message_arima = create_arima_forecast(combined, selected_station, forecast_days_arima)
-            st.plotly_chart(fig_arima, use_container_width=True)
-            st.info(message_arima)
+            # Filter data to only use data from first of June onwards
+            combined_filtered = combined.copy()
+            combined_filtered['date'] = pd.to_datetime(combined_filtered['date'])
+            
+            # Determine the year from the data and set first of June of that year
+            data_year = combined_filtered['date'].dt.year.min()
+            june_start = pd.to_datetime(f'{data_year}-06-01')
+            combined_filtered = combined_filtered[combined_filtered['date'] >= june_start]
+            
+            if combined_filtered.empty:
+                st.warning("No data available from first of June onwards for ARIMA analysis.")
+            else:
+                fig_arima, message_arima = create_arima_forecast(combined_filtered, selected_station, forecast_days_arima)
+                st.plotly_chart(fig_arima, use_container_width=True)
         except Exception as e:
             st.error(f"Error in ARIMA forecast: {e}")
 
@@ -816,7 +680,7 @@ def render_models_map_mode(combined, dates, session_state):
     # ═══════════════════════════════════════════════════════════════════════════════
     # 2. PEAK/OFF-PEAK PREDICTION  
     # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader("⏰ Peak/Off-Peak Analysis")
+    st.subheader("Peak/Off-Peak Analysis")
     
     # Simple date selection
     col1, col2 = st.columns(2)
@@ -857,14 +721,7 @@ def render_models_map_mode(combined, dates, session_state):
             analysis_start = dates[0]
             analysis_end = dates[-1]
     
-    # Show analysis info
-    if analysis_mode == "Single Day":
-        st.info(f"🔍 Analyzing: {analysis_start}")
-    elif analysis_mode == "Date Range":
-        st.info(f"🔍 Analyzing: {analysis_start} to {analysis_end}")
-    else:
-        st.info(f"🔍 Analyzing: All available data")
-
+   
     # Run peak analysis
     with st.spinner("Analyzing peak periods..."):
         try:
@@ -876,22 +733,6 @@ def render_models_map_mode(combined, dates, session_state):
                 use_all_time
             )
             st.plotly_chart(fig_peak, use_container_width=True)
-            
-            # Add explanation
-            with st.expander("ℹ️ How to read the Peak Analysis", expanded=False):
-                st.markdown("""
-                **🌡️ 5-Level Color Scale:**
-                - **🔵 Cold Blue (0-20%)**: Very low activity stations
-                - **🟦 Cool Blue (20-40%)**: Low activity stations  
-                - **🟡 Yellow (40-60%)**: Medium activity stations
-                - **� Orange (60-80%)**: High activity stations
-                - **🔴 Hot Red (80-100%)**: Peak activity stations
-                
-                **📊 Analysis Details:**
-                - Marker size indicates activity level
-                - Percentages are relative to the selected time period
-                - Hover over stations to see detailed activity numbers
-                """)
                 
         except Exception as e:
             st.error(f"Error in peak analysis: {e}")
@@ -901,10 +742,15 @@ def render_models_map_mode(combined, dates, session_state):
     # ═══════════════════════════════════════════════════════════════════════════════
     # 4. ANOMALY DETECTION
     # ═══════════════════════════════════════════════════════════════════════════════
-    st.subheader("Monthly Anomaly Detection")
+    st.subheader(" Monthly Anomaly Detection")
 
-    st.write(f"Z-Score Threshold: {z_threshold}")
-    st.info("This analysis uses the selected month's data to detect anomalous station behavior patterns.")
+
+    # Z-Score threshold setting above the anomaly detection (shorter slider)
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        z_threshold = st.slider("Z-Score Threshold (Anomaly Detection):", 2.0, 3.0, 2.5, 0.1)
+    with col2:
+        pass
 
     # Month selector
     available_months = sorted(pd.to_datetime(combined['date']).dt.to_period('M').unique())
