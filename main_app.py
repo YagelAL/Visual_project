@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,8 +7,6 @@ from sklearn.linear_model import LinearRegression
 from datetime import date
 import plotly.express as px
 import datetime
-
-# Import helper functions
 from helper_functions import (
     load_processed_data,
     prepare_daily_time_series_data,
@@ -29,13 +28,10 @@ from helper_functions import (
     create_parallel_coordinates_plot
 )
 
-# ── PERFORMANCE CONFIGURATION ──────────────────────────────────────────────────
-# Station limits optimize rendering speed vs data completeness
-MAX_STATIONS_GLOBAL = 200          # Main data loading limit
-MAX_STATIONS_COMPLEX_VIZ = 100     # Complex visualizations (spider, clustering)
-MAX_STATIONS_SIMPLE_VIZ = 200      # Simple visualizations (maps, charts)
+MAX_STATIONS_GLOBAL = 200
+MAX_STATIONS_COMPLEX_VIZ = 100
+MAX_STATIONS_SIMPLE_VIZ = 200
 
-# ── STREAMLIT PAGE SETUP ───────────────────────────────────────────────────────
 st.set_page_config(
     page_title="NYC Citibike Station Visualization",
     page_icon="🚲",
@@ -45,27 +41,13 @@ st.set_page_config(
 
 
 def main():
-    # Initialize performance settings in session state
     if "max_stations_simple_viz" not in st.session_state:
         st.session_state.max_stations_simple_viz = MAX_STATIONS_SIMPLE_VIZ
     if "max_stations_complex_viz" not in st.session_state:
         st.session_state.max_stations_complex_viz = MAX_STATIONS_COMPLEX_VIZ
 
-    st.title("NYC Citibike Station Visualization (All Time)")
+    st.title("NYC Citibike Station Visualization")
 
-
-    # Load and validate data
-    # Use only rides_03_2025_cleaned.csv for Daily Rides Overview plots
-    try:
-        rides_march = pd.read_csv("processed_202503.csv")
-    except Exception:
-        try:
-            rides_march = pd.read_csv("rides_03_2025_cleaned.csv")
-        except Exception:
-            st.error("Could not load rides_03_2025_cleaned.csv or processed_202503.csv.")
-            return
-
-    # Load all processed data for other visualizations
     data = load_processed_data()
     if not data:
         st.error("No data loaded.")
@@ -73,9 +55,7 @@ def main():
 
     combined = pd.concat(data.values(), ignore_index=True)
     combined['date'] = pd.to_datetime(combined['date']).dt.date
-    # For anomaly detection, get all available dates
     all_dates = sorted(combined['date'].unique())
-    # For all plots, keep March 2025 as default if available
     march_dates = [d for d in all_dates if d.month == 3 and d.year == 2025]
     if march_dates:
         default_month_start = min(march_dates)
@@ -87,10 +67,8 @@ def main():
         dates = sorted(all_dates)
     all_stations_df = combined[['station_name', 'lat', 'lng']].drop_duplicates()
 
-    # Main navigation
     st.sidebar.header("Map Mode")
     mode = st.sidebar.radio("Choose view:", ["Main Map", "Timeline", "Models"])
-    # Pass all_dates to Models mode for anomaly month selector
     if mode == "Main Map":
         render_main_map_mode(combined, dates)
     elif mode == "Timeline":
@@ -142,43 +120,79 @@ def render_main_map_mode(combined, dates):
     # Chart type and date range selection
     chart_type = st.radio("Select chart type:", ["Hourly plot", "Daily Bar Chart"], horizontal=True)
 
-    # Use rides_03_2025_cleaned.csv for these plots
-    try:
-        rides_march = pd.read_csv("processed_202503.csv")
-    except Exception:
+    # Load all available cleaned and processed files for daily rides overview
+    import glob, os
+    cleaned_files = glob.glob("rides_*_cleaned.csv")
+    processed_files = glob.glob("processed_*.csv")
+
+    # Build a mapping from month/year to file
+    file_map = {}
+    for f in cleaned_files:
+        base = os.path.basename(f)
+        parts = base.split('_')
+        if len(parts) >= 4:
+            mm = parts[1]
+            yyyy = parts[2]
+            key = f"{mm}_{yyyy}"
+            file_map[key] = f
+    for f in processed_files:
+        base = os.path.basename(f)
+        name = base.replace("processed_","").replace(".csv","")
+        if len(name) == 6:
+            mm = name[:2]
+            yyyy = name[2:]
+            key = f"{mm}_{yyyy}"
+            if key not in file_map:
+                file_map[key] = f
+
+    # Collect all available dates from all files
+    available_dates = []
+    date_file_map = {}
+    for key, fpath in file_map.items():
         try:
-            rides_march = pd.read_csv("rides_03_2025_cleaned.csv")
+            df = pd.read_csv(fpath)
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            for d in sorted(df['date'].unique()):
+                available_dates.append(d)
+                date_file_map[d] = fpath
         except Exception:
-            st.error("Could not load rides_03_2025_cleaned.csv or processed_202503.csv.")
-            return
+            continue
+    available_dates = sorted(set(available_dates))
 
-    # Ensure 'date' column is datetime.date type for filtering
-    rides_march['date'] = pd.to_datetime(rides_march['date']).dt.date
-    march_dates = sorted(rides_march["date"].unique())
-    # Restrict selection to March 2025 only
-    march_start = min(march_dates)
-    march_end = max(march_dates)
-    # Default to first date in March 2025 if available
-    default_overview_start = march_start
-    default_overview_end = march_end
-    col1, col2 = st.columns(2)
-    with col1:
-        overview_start = st.date_input("Overview Start Date (March 2025 only)", value=default_overview_start, min_value=march_start, max_value=march_end, key="march_overview_start")
-    with col2:
-        overview_end = st.date_input("Overview End Date (March 2025 only)", value=default_overview_end, min_value=march_start, max_value=march_end, key="march_overview_end")
+    if available_dates:
+        # Default to first date in March 2025 if available
+        march_2025_dates = [d for d in available_dates if d.month == 3 and d.year == 2025]
+        default_overview_start = march_2025_dates[0] if march_2025_dates else available_dates[0]
+        default_overview_end = march_2025_dates[-1] if march_2025_dates else available_dates[-1]
+        col1, col2 = st.columns(2)
+        with col1:
+            overview_start = st.date_input("Overview Start Date:", value=default_overview_start, min_value=available_dates[0], max_value=available_dates[-1], key="overview_start")
+        with col2:
+            overview_end = st.date_input("Overview End Date:", value=default_overview_end, min_value=available_dates[0], max_value=available_dates[-1], key="overview_end")
 
-    # Filter rides_march for selected date range
-    filtered_march = rides_march[(rides_march['date'] >= overview_start) & (rides_march['date'] <= overview_end)]
-
-    # Generate chart based on selection
-    if overview_start <= overview_end:
-        if chart_type == "Hourly plot":
-            daily_chart = create_daily_rides_continuous_plot(filtered_march, overview_start, overview_end, max_stations=st.session_state.max_stations_simple_viz)
+        # Find file for each date in range and concatenate
+        date_range = [d for d in available_dates if overview_start <= d <= overview_end]
+        dfs = []
+        for d in date_range:
+            fpath = date_file_map.get(d)
+            if fpath:
+                try:
+                    df = pd.read_csv(fpath)
+                    df['date'] = pd.to_datetime(df['date']).dt.date
+                    dfs.append(df[df['date'] == d])
+                except Exception:
+                    continue
+        if dfs:
+            filtered_all = pd.concat(dfs, ignore_index=True)
+            if chart_type == "Hourly plot":
+                daily_chart = create_daily_rides_continuous_plot(filtered_all, overview_start, overview_end, max_stations=st.session_state.max_stations_simple_viz)
+            else:
+                daily_chart = create_daily_rides_bar_chart(filtered_all, overview_start, overview_end, max_stations=st.session_state.max_stations_simple_viz)
+            st.plotly_chart(daily_chart, use_container_width=True)
         else:
-            daily_chart = create_daily_rides_bar_chart(filtered_march, overview_start, overview_end, max_stations=st.session_state.max_stations_simple_viz)
-        st.plotly_chart(daily_chart, use_container_width=True)
+            st.warning("No data available for selected date range.")
     else:
-        st.error("Start date must be before or equal to end date")
+        st.warning("No data available for daily rides overview.")
 
     # ── TIME SERIES CLUSTERING ANALYSIS ────────────────────────────────────────
     st.header("Daily Time Series Clustering")
