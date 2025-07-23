@@ -1761,10 +1761,7 @@ def create_arima_forecast(combined, selected_station, forecast_days=7):
 
         # Generate predictions with confidence bounds
         forecast = fitted_model.forecast(steps=forecast_days)
-        forecast_index = pd.date_range(
-            start=ts.index[-1] + pd.Timedelta(days=1), 
-            periods=forecast_days
-        )
+        forecast_index = pd.date_range(start=ts.index[-1] + pd.Timedelta(days=1), periods=forecast_days)
         forecast_ci = fitted_model.get_forecast(steps=forecast_days).conf_int()
 
         # Build visualization layers

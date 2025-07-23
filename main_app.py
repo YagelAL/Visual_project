@@ -591,14 +591,19 @@ def render_models_map_mode(combined, dates, session_state):
     with col2:
         st.success(f"**Selected Station:**\n{selected_station}")
 
-    # Run ARIMA analysis with data filtering
+    # Run ARIMA analysis using June 2025 for training and forecast for dates after June 2025
     with st.spinner("Running ARIMA model..."):
         try:
-            filtered_data = filter_data_from_june(combined)
-            if filtered_data.empty:
-                st.warning("No data available from first of June onwards for ARIMA analysis.")
+            # Filter for June 2025
+            combined['date'] = pd.to_datetime(combined['date'])
+            june_start = pd.to_datetime('2025-06-01')
+            june_end = pd.to_datetime('2025-06-30')
+            june_data = combined[(combined['date'] >= june_start) & (combined['date'] <= june_end)]
+            forecast_days = forecast_days_arima
+            if june_data.empty:
+                st.warning("No data available for June 2025 for ARIMA analysis.")
             else:
-                fig_arima, message_arima = create_arima_forecast(filtered_data, selected_station, forecast_days_arima)
+                fig_arima, message_arima = create_arima_forecast(june_data, selected_station, forecast_days)
                 st.plotly_chart(fig_arima, use_container_width=True)
         except Exception as e:
             st.error(f"Error in ARIMA forecast: {e}")
@@ -610,13 +615,38 @@ def render_models_map_mode(combined, dates, session_state):
     
     analysis_start, analysis_end, use_all_time = render_peak_analysis_controls(dates, analysis_date)
     
-    # Generate peak analysis
-    with st.spinner("Analyzing peak periods..."):
+    # Generate peak analysis using processed_*.csv files
+    import glob, os
+    processed_files = glob.glob(os.path.join(os.path.dirname(__file__), "processed_*.csv"))
+    dfs = []
+    for f in processed_files:
         try:
-            fig_peak = predict_peak_periods_standalone(combined, analysis_start, analysis_end, use_all_time)
-            st.plotly_chart(fig_peak, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error in peak analysis: {e}")
+            df = pd.read_csv(f)
+            df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
+            dfs.append(df)
+        except Exception:
+            continue
+    if dfs:
+        processed_all = pd.concat(dfs, ignore_index=True)
+        # Filter for selected date range
+        if use_all_time:
+            filtered = processed_all
+        elif analysis_end is not None:
+            filtered = processed_all[(processed_all['date'] >= analysis_start) & (processed_all['date'] <= analysis_end)]
+        else:
+            filtered = processed_all[processed_all['date'] == analysis_start]
+
+        # Limit to 200 points per day
+        filtered_limited = filtered.groupby('date').apply(lambda x: x.head(200)).reset_index(drop=True)
+
+        with st.spinner("Analyzing peak periods from processed files (max 200 points/day)..."):
+            try:
+                fig_peak = predict_peak_periods_standalone(filtered_limited, analysis_start, analysis_end, use_all_time)
+                st.plotly_chart(fig_peak, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error in peak analysis: {e}")
+    else:
+        st.warning("No processed data available for peak analysis.")
 
     st.markdown("---")
 

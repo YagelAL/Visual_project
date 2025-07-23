@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NYC CitiBike - Data-Driven Solutions</title>
+    <style>
+        /* Print Styles */
+        @media print {
+            body { background: white; }
+            .navigation, .slide-indicator { display: none !important; }
+            .slide { 
+                display: block !important; 
+                page-break-after: always;
+                width: 100%;
+                height: 100vh;
+            }
+            .slide:last-child { page-break-after: avoid; }
+        }
+
+        /* Basic Layout */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .slideshow-container {
+            position: relative;
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Slide Styles */
+        .slide {
+            display: none;
+            padding: 40px 50px;
+            width: 100%;
+            height: 100vh;
+            background: white;
+            overflow-y: auto;
+            position: relative;
+            animation: slideIn 0.5s ease-in-out;
+        }
+
+        .slide.active {
+            display: block;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(50px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        /* Cover Slide */
+        .cover-slide {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .bike-icon {
+            font-size: 6em;
+            margin-bottom: 20px;
+            animation: bounce 2s ease-in-out infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-20px); }
+        }
+
+        .cover-title {
+            font-size: 4em;
+            font-weight: bold;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .cover-subtitle {
+            font-size: 2em;
+            margin-bottom: 40px;
+            opacity: 0.9;
+        }
+
+        .authors {
+            font-size: 1.4em;
+            opacity: 0.8;
+        }
+
+        /* Slide Elements */
+        .slide-number {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            background: #667eea;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        .slide-title {
+            font-size: 3em;
+            color: #2c3e50;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 4px solid #667eea;
+            font-weight: bold;
+        }
+
+        /* Content Sections */
+        .content-section {
+            margin-bottom: 40px;
+        }
+
+        .section-title {
+            font-size: 1.8em;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-weight: bold;
+            padding-left: 10px;
+            border-left: 5px solid #3498db;
+        }
+
+        .content-text {
+            font-size: 1.2em;
+            line-height: 1.6;
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+
+        /* Feature Grid */
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .feature-card {
+            background: #f8f9fa;
+            padding: 18px;
+            border-radius: 12px;
+            border: 2px solid #e9ecef;
+            transition: all 0.3s ease;
+            box-shadow: 0 3px 5px rgba(0,0,0,0.1);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+            border-color: #667eea;
+        }
+
+        .feature-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 4px 10px rgba(52, 152, 219, 0.3);
+        }
+
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        /* Two Column Layout */
+        .two-column {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin: 20px 0;
+        }
+
+        /* Lists */
+        .list-style {
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }
+
+        .list-style li {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+
+        /* Highlight Box */
+        .highlight-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin: 30px 0;
+            text-align: center;
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        /* Navigation */
+        .navigation {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            z-index: 1000;
+        }
+
+        .nav-button {
+            background: rgba(102, 126, 234, 0.9);
+            color: white;
+            border: 2px solid white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.85em;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .nav-button:hover {
+            background: rgba(102, 126, 234, 1);
+            transform: translateY(-2px);
+        }
+
+        .nav-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Slide Indicators */
+        .slide-indicator {
+            position: fixed;
+            top: 50%;
+            right: 20px;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 1000;
+        }
+
+        .indicator-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.5);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .indicator-dot.active {
+            background: white;
+            transform: scale(1.3);
+        }
+
+        .indicator-dot:hover {
+            background: rgba(255, 255, 255, 0.8);
+            transform: scale(1.1);
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .slide {
+                padding: 20px 25px;
+            }
+            
+            .cover-title {
+                font-size: 2.5em;
+            }
+            
+            .cover-subtitle {
+                font-size: 1.5em;
+            }
+            
+            .slide-title {
+                font-size: 2em;
+            }
+            
+            .feature-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .two-column {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 480px) {
+            .slide {
+                padding: 15px 20px;
+            }
+            
+            .nav-button {
+                padding: 10px 18px;
+                font-size: 0.9em;
+            }
+            
+            .slide-indicator {
+                right: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    
+    <div class="slideshow-container">
+        
+        <!-- NEW Title Slide - SLIDE 1 -->
+        <div class="slide active" style="background: white; color: #333; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+            <div class="bike-icon" style="color: #667eea;">🚲</div>
+            <div class="cover-title" style="color: #2c3e50; text-shadow: none;">NYC CitiBike</div>
+            <div class="cover-subtitle" style="color: #34495e;">Balancing and Management Problem</div>
+            <div class="authors" style="color: #2c3e50;">
+                <strong>By: Yagel Alfasi & Nachal Metzger</strong>
+            </div>
+            <div class="highlight-box" style="margin-top: 50px;">
+                <div style="font-size: 1.3em;">Data-Driven Solutions for Urban Mobility Optimization</div>
+            </div>
+        </div>
+
+
+        <!-- Slide 3: The Problem -->
+        <div class="slide">
+            <div class="slide-number">2</div>
+            <div class="slide-title">1. The Problem</div>
+            
+            <div class="content-section">
+                <div class="section-title">Project Overview</div>
+                <div class="content-text">
+                    This project develops an interactive web application that transforms NYC CitiBike's complex operational data into actionable insights for better decision-making and system optimization.
+                </div>
+            </div>
+
+            <div class="content-section">
+                <div class="section-title">a) What Problem Does Our Interactive App Solve?</div>
+                <div class="content-text">
+                    NYC CitiBike system faces critical operational challenges in station balancing and resource management. Our interactive application addresses:
+                </div>
+                
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <div class="feature-title">🚲 Station Imbalance</div>
+                        <div>Some stations consistently empty while others overflow, causing user frustration and operational inefficiency</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">📊 Data Complexity</div>
+                        <div>Millions of trip records with hidden temporal and spatial patterns difficult to analyze manually</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">🔍 Pattern Recognition</div>
+                        <div>Complex usage patterns across time (hourly, daily, seasonal) remain invisible without proper tools</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">⚠️ Anomaly Detection</div>
+                        <div>Unusual station behavior and system failures go undetected until user complaints</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-section">
+                <div class="section-title">b) How Our App Solves These Problems</div>
+                <div class="highlight-box">
+                    <div style="font-size: 1.6em; text-align: center; line-height: 1.4;">
+                        Transform complex bike-sharing data into actionable insights through interactive visualization, predictive analytics, and intelligent pattern recognition
+                    </div>
+                    <div style="text-align: center; font-size: 1.4em; margin-top: 20px;">
+                        and Make complex urban mobility data accessible, understandable, and actionable for everyone
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 4: The Data -->
+        <div class="slide">
+            <div class="slide-number">3</div>
+            <div class="slide-title">2. The Data</div>
+            
+            <div class="content-section">
+                <div class="section-title">a) Data Source</div>
+                <div class="content-text">
+                    Our analysis utilizes NYC CitiBike trip data, officially provided by Lyft (CitiBike operator). The dataset contains comprehensive bike-sharing transaction records from the NYC metropolitan area.
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-number">4</div>
+                        <div class="stat-label">Months of Data</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">200+</div>
+                        <div class="stat-label">Station Locations</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">1M+</div>
+                        <div class="stat-label">Trip Records</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">NYC</div>
+                        <div class="stat-label">Geographic Area</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-section">
+                <div class="section-title">b) Data Structure and Type</div>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <div class="feature-title">🕐 Trip Duration & Timestamps</div>
+                        <div>Detailed timing information for each bike trip including start/end times and duration calculations</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">📍 Station Coordinates</div>
+                        <div>Precise geographic locations of start and end stations with latitude/longitude data</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">🏷️ Station Names & IDs</div>
+                        <div>Unique identifiers and descriptive names for all CitiBike stations across NYC</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">👥 User Classification</div>
+                        <div>User type information distinguishing between subscribers and casual riders</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">🚲 Bike Type Information</div>
+                        <div>Classification of different bike types including standard and electric bikes</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">📊 Daily Activity Summaries</div>
+                        <div>Processed daily arrivals and departures per station for trend analysis</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">⚖️ Net Balance Calculations</div>
+                        <div>Station balance metrics showing bike surplus/deficit for each location</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">🌐 Geographic Clustering</div>
+                        <div>Spatial grouping data for analyzing neighborhood and regional patterns</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 5: Data Statistics and Trends -->
+        <div class="slide">
+            <div class="slide-number">4</div>
+            <div class="slide-title" >3. Data Transformations</div>
+            
+            <div class="content-section">
+                <div class="section-title">How We Processed the Raw Data</div>
+                <div class="content-text">
+                    We took millions of raw bike trip records and transformed them into meaningful insights that can be easily visualized and understood.
+                </div>
+                
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <div class="feature-title">📅 Daily Summaries</div>
+                        <div>Convert individual trip records into daily arrival/departure counts per station</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">⚖️ Balance Calculations</div>
+                        <div>Calculate net bike flow (arrivals minus departures) for each station daily</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">📍 Location Grouping</div>
+                        <div>Group nearby stations by geographic clusters for neighborhood analysis</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">📊 Pattern Preparation</div>
+                        <div>Aggregate data for time series analysis and trend visualization</div>
+                    </div>
+                </div>
+
+                <div class="highlight-box">
+                    <div style="font-size: 2em; text-align: center;">
+                        🔄 Raw Trip Data → Daily Station Activity → Visual Patterns → Actionable Insights
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 6: Why Data Transformations Matter -->
+        <div class="slide">
+            <div class="slide-number">5</div>
+            <div class="slide-title">3. Why Data Transformations Matter</div>
+            
+            <div class="content-section">
+                <div class="section-title">b) Why We Made These Changes</div>
+                <div class="feature-grid">
+                    <div class="feature-card" style="background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); color: white;">
+                        <div class="feature-title" style="color: white; font-size: 1.6em; margin-bottom: 15px;">🔧 Making It Manageable</div>
+                        <ul class="list-style" style="font-size: 1.3em; line-height: 1.6;">
+                            <li>Millions of individual trips become thousands of daily summaries</li>
+                            <li>App loads quickly and runs smoothly</li>
+                            <li>Users can explore data without waiting</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="feature-card" style="background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); color: white;">
+                        <div class="feature-title" style="color: white; font-size: 1.6em; margin-bottom: 15px;">📖 Finding the Story</div>
+                        <ul class="list-style" style="font-size: 1.3em; line-height: 1.6;">
+                            <li>Balance shows which stations need attention</li>
+                            <li>Daily patterns reveal rush hour trends</li>
+                            <li>Location groups show neighborhood differences</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="feature-card" style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white;">
+                        <div class="feature-title" style="color: white; font-size: 1.6em; margin-bottom: 15px;">🎨 Better Visualizations</div>
+                        <ul class="list-style" style="font-size: 1.3em; line-height: 1.6;">
+                            <li>Maps can show clear color patterns</li>
+                            <li>Charts display meaningful trends over time</li>
+                            <li>Comparisons between stations become possible</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="feature-card" style="background: linear-gradient(135deg, #27ae60 0%, #229954 100%); color: white;">
+                        <div class="feature-title" style="color: white; font-size: 1.6em; margin-bottom: 15px;">✅ Practical Results</div>
+                        <ul class="list-style" style="font-size: 1.3em; line-height: 1.6;">
+                            <li>Operators can see problem stations at a glance</li>
+                            <li>Predictions become possible with clean time series</li>
+                            <li>Unusual behaviors are easier to spot</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 8: Interactions and Visualizations -->
+        <div class="slide">
+            <div class="slide-number">6</div>
+            <div class="slide-title">4. Interactions and Visualizations</div>
+            
+            <div class="content-section">
+                <div class="section-title">How Users Navigate Through Our App</div>
+                <div class="content-text">
+                    Our app guides users through three main areas, each building on the previous one to provide deeper insights.
+                </div>
+                
+                <div class="highlight-box" style="background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); margin: 20px 0;">
+                    <div style="font-size: 1.8em; text-align: center;">
+                        📊 <strong>Main Map</strong> → ⏱️ <strong>Timeline</strong> → 🔮 <strong>Models</strong>
+                    </div>
+                    <div style="font-size: 1.6em; text-align: center; margin-top: 10px;">
+                        Explore Today → See Changes Over Time → Predict the Future
+                    </div>
+                </div>
+                
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <div class="feature-title" style="font-size: 1.5em;">🗺️ Interactive Maps</div>
+                        <div style="font-size: 1.2em;">Click, zoom, filter stations by activity level. See real-time patterns across NYC</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title" style="font-size: 1.5em;">📈 Time Analysis</div>
+                        <div style="font-size: 1.2em;">Explore trends over time with animated maps and interactive time series charts</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title" style="font-size: 1.5em;">🔮 Predictive Models</div>
+                        <div style="font-size: 1.2em;">Forecast future demand and detect unusual patterns using machine learning</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title" style="font-size: 1.5em;">🎨 Visual Analytics</div>
+                        <div style="font-size: 1.2em;">Spider plots, time wheels, and clustering reveal hidden data relationships</div>
+                    </div>
+                </div>
+
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; margin-top: 25px;">
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+                        <div style="text-align: center;">
+                            <div style="background: #3498db; color: white; padding: 12px; border-radius: 50%; width: 50px; height: 50px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center;">
+                                <strong style="font-size: 1.8em;">1</strong>
+                            </div>
+                            <div style="font-weight: bold; margin-bottom: 8px; font-size: 3em;">Start Simple</div>
+                            <div style="font-size: 2em; color: #7f8c8d;">Pick a date, see which stations are busy or empty</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="background: #e74c3c; color: white; padding: 12px; border-radius: 50%; width: 50px; height: 50px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center;">
+                                <strong style="font-size: 1.8em;">2</strong>
+                            </div>
+                            <div style="font-weight: bold; margin-bottom: 8px; font-size: 3em;">See Patterns</div>
+                            <div style="font-size: 2em; color: #7f8c8d;">Watch how stations change day by day, spot trends</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="background: #27ae60; color: white; padding: 12px; border-radius: 50%; width: 50px; height: 50px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center;">
+                                <strong style="font-size: 1.8em;">3</strong>
+                            </div>
+                            <div style="font-weight: bold; margin-bottom: 8px; font-size: 3em;">Get Insights</div>
+                            <div style="font-size: 2em; color: #7f8c8d;">Predict future demand, find unusual problems</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 10: Interactive Features -->
+        <div class="slide">
+            <div class="slide-number">7</div>
+            <div class="slide-title">4a. What Users Can Do & How It Helps</div>
+            
+            <div class="content-section">
+                <div class="section-title">Interactive Features by Category</div>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <div class="feature-title">🗺️ Interactive Maps (Fully Interactive)</div>
+                        <ul class="list-style">
+                            <li><strong>Click stations</strong> to see details and activity levels</li>
+                            <li><strong>Adjust radius</strong> to group nearby stations together</li>
+                            <li><strong>Filter by station type</strong> (busy, empty, balanced)</li>
+                            <li><strong>Benefit:</strong> Quickly identify problem areas needing attention</li>
+                        </ul>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">📈 Time Charts (Semi-Interactive)</div>
+                        <ul class="list-style">
+                            <li><strong>Select date ranges</strong> to compare different periods</li>
+                            <li><strong>Hover for details</strong> on specific days or hours</li>
+                            <li><strong>Toggle between</strong> daily/hourly views</li>
+                            <li><strong>Benefit:</strong> Understand when demand peaks occur</li>
+                        </ul>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">🎯 Prediction Tools (Interactive Setup)</div>
+                        <ul class="list-style">
+                            <li><strong>Choose any station</strong> from map or dropdown</li>
+                            <li><strong>Set forecast period</strong> (3-14 days ahead)</li>
+                            <li><strong>Adjust sensitivity</strong> for anomaly detection</li>
+                            <li><strong>Benefit:</strong> Plan ahead and catch problems early</li>
+                        </ul>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">🎨 Visual Analysis (Interactive Exploration)</div>
+                        <ul class="list-style">
+                            <li><strong>Spider plots</strong> show multiple station features at once</li>
+                            <li><strong>Time wheels</strong> reveal daily and weekly patterns</li>
+                            <li><strong>Cluster analysis</strong> groups similar stations together</li>
+                            <li><strong>Benefit:</strong> Discover hidden patterns and relationships</li>
+                        </ul>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">💡 Practical Benefits</div>
+                        <ul class="list-style">
+                            <li><strong>Decision makers</strong> get insights in minutes, not hours</li>
+                            <li><strong>Non-technical users</strong> can explore complex data</li>
+                            <li><strong>Findings</strong> can be shared easily with screenshots</li>
+                            <li><strong>Scales</strong> from small tests to city-wide analysis</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 11: Application Map/Tree -->
+        <div class="slide">
+            <div class="slide-number">8</div>
+            <div class="slide-title">4b. Application Architecture Map</div>
+            
+            <div class="content-section">
+                <div class="section-title">App Structure & User Flow</div>
+                
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 15px; margin: 5px 0; position: relative;">
+                    <!-- Hierarchical App Structure -->
+                    <div style="position: relative;">
+                        
+                        <!-- Level 2: Main Dashboard -->
+                        <div style="text-align: center; margin-bottom: 25px;">
+                            <div style="background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); color: white; padding: 20px; border-radius: 12px; display: inline-block; width: 250px; box-shadow: 0 6px 12px rgba(52,152,219,0.3);">
+                                <div style="font-size: 2em; margin-bottom: 8px;">🏠</div>
+                                <strong style="font-size: 1.3em;">Main Dashboard</strong>
+                                <div style="font-size: 0.9em; margin-top: 6px; opacity: 0.9;">Interactive Station Map</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Branching connections -->
+                        <div style="display: flex; justify-content: center; align-items: center; margin: 20px 0; position: relative;">
+                            <!-- Left branch line -->
+                            <div style="position: absolute; left: 25%; top: 50%; width: 20%; height: 3px; background: #e74c3c; transform: translateY(-50%);"></div>
+                            <!-- Right branch line -->
+                            <div style="position: absolute; right: 25%; top: 50%; width: 20%; height: 3px; background: #27ae60; transform: translateY(-50%);"></div>
+                            <!-- Center vertical line -->
+                            <div style="width: 3px; height: 30px; background: #7f8c8d;"></div>
+                        </div>
+                        
+                        <!-- Level 3: Analysis Modules -->
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 15px;">
+                            
+                            <!-- Timeline Analysis Branch -->
+                            <div style="flex: 1; text-align: center;">
+                                <div style="background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); color: white; padding: 18px; border-radius: 12px; margin: 0 15px; box-shadow: 0 6px 12px rgba(231,76,60,0.3);">
+                                    <div style="font-size: 2em; margin-bottom: 8px;">📈</div>
+                                    <strong style="font-size: 1.3em;">Timeline Analysis</strong>
+                                    <div style="font-size: 0.9em; margin-top: 6px; opacity: 0.9;">Historical Trends & Patterns</div>
+                                </div>
+
+                            </div>
+                            
+                            <!-- Predictive Models Branch -->
+                            <div style="flex: 1; text-align: center;">
+                                <div style="background: linear-gradient(135deg, #27ae60 0%, #229954 100%); color: white; padding: 18px; border-radius: 12px; margin: 0 15px; box-shadow: 0 6px 12px rgba(39,174,96,0.3);">
+                                    <div style="font-size: 2em; margin-bottom: 8px;">🤖</div>
+                                    <strong style="font-size: 1.3em;">Predictive Models</strong>
+                                    <div style="font-size: 0.9em; margin-top: 6px; opacity: 0.9;">ML-Powered Forecasting</div>
+                                </div>
+
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-section" style="margin-bottom: 10px;">
+                <div class="section-title">User Experience</div>
+                <div class="feature-grid" style="gap: 3px;">
+                    <div class="feature-card" style="background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); color: white; padding: 6px;">
+                        <div class="feature-title" style="color: white; font-size: 1.4em; margin-bottom: 3px;">👁️ Intuitive Visual Design</div>
+                        <div style="font-size: 1.1em;">Color-coded maps and charts make patterns instantly recognizable</div>
+                    </div>
+                    <div class="feature-card" style="background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%); color: white; padding: 6px;">
+                        <div class="feature-title" style="color: white; font-size: 1.4em; margin-bottom: 3px;">🖱️ Interactive Exploration</div>
+                        <div style="font-size: 1.1em;">Click, hover, and filter to dive deeper into data stories</div>
+                    </div>
+                    <div class="feature-card" style="background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%); color: white; padding: 12px;">
+                        <div class="feature-title" style="color: white; font-size:1.4em; margin-bottom: 6px;">� Multi-View Analytics</div>
+                        <div style="font-size: 1.1;">Maps, charts, and plots work together for complete understanding</div>
+                    </div>
+                    <div class="feature-card" style="background: linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%); color: white; padding: 6px;">
+                        <div class="feature-title" style="color: white; font-size: 1.4em; margin-bottom: 3px;">⚡ Real-Time Responsiveness</div>
+                        <div style="font-size: 1.1em;">Smooth animations and instant feedback enhance exploration flow</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 9: End Slide -->
+        <div class="slide">
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; height: calc(100vh - 80px); margin: -40px -50px; padding: 40px 50px;">
+                <div style="font-size: 6em; margin-bottom: 30px; animation: bounce 2s ease-in-out infinite;">🚲</div>
+                <div style="font-size: 4em; font-weight: bold; margin-bottom: 30px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">Thank You!</div>
+                <div style="font-size: 2.5em; margin-bottom: 40px; opacity: 0.9;">NYC CitiBike Data Analysis</div>
+                <div style="font-size: 1.8em; opacity: 0.8; margin-bottom: 30px;">
+                    <strong>Yagel Alfasi & Nachal Metzger</strong>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Navigation -->
+        <div class="slide-indicator">
+            <span class="indicator-dot active" onclick="window.currentSlide(1)"></span>
+            <span class="indicator-dot" onclick="window.currentSlide(2)"></span>
+            <span class="indicator-dot" onclick="window.currentSlide(3)"></span>
+            <span class="indicator-dot" onclick="window.currentSlide(4)"></span>
+            <span class="indicator-dot" onclick="window.currentSlide(5)"></span>
+            <span class="indicator-dot" onclick="window.currentSlide(6)"></span>
+            <span class="indicator-dot" onclick="window.currentSlide(7)"></span>
+            <span class="indicator-dot" onclick="window.currentSlide(8)"></span>
+            <span class="indicator-dot" onclick="window.currentSlide(9)"></span>
+        </div>
+        
+    <div class="navigation">
+        <button class="nav-button" onclick="window.changeSlide(-1)" id="prevBtn">❮ Previous</button>
+        <button class="nav-button" onclick="window.changeSlide(1)" id="nextBtn">Next ❯</button>
+    </div>
+
+    <script>
+        let currentSlideIndex = 1;
+        const totalSlides = 9;
+
+        window.showSlide = function(n) {
+            console.log('Showing slide:', n); // Debug log
+            
+            const slides = document.getElementsByClassName('slide');
+            const dots = document.getElementsByClassName('indicator-dot');
+            
+            console.log('Total slides found:', slides.length); // Debug log
+            
+            // Ensure we stay within bounds
+            if (n > totalSlides) currentSlideIndex = totalSlides;
+            if (n < 1) currentSlideIndex = 1;
+            else currentSlideIndex = n;
+            
+            // Hide all slides
+            for (let i = 0; i < slides.length; i++) {
+                slides[i].classList.remove('active');
+                slides[i].style.display = 'none';
+            }
+            
+            // Remove active from all dots
+            for (let i = 0; i < dots.length; i++) {
+                dots[i].classList.remove('active');
+            }
+            
+            // Show current slide
+            if (slides[currentSlideIndex - 1]) {
+                slides[currentSlideIndex - 1].classList.add('active');
+                slides[currentSlideIndex - 1].style.display = 'block';
+            }
+            
+            // Activate current dot
+            if (dots[currentSlideIndex - 1]) {
+                dots[currentSlideIndex - 1].classList.add('active');
+            }
+            
+            // Update navigation buttons
+            const prevBtn = document.getElementById('prevBtn');
+            const nextBtn = document.getElementById('nextBtn');
+            if (prevBtn) prevBtn.disabled = (currentSlideIndex <= 1);
+            if (nextBtn) nextBtn.disabled = (currentSlideIndex >= totalSlides);
+            
+            console.log('Current slide index:', currentSlideIndex); // Debug log
+        }
+
+        window.changeSlide = function(n) {
+            console.log('Change slide by:', n, 'from current:', currentSlideIndex); // Debug log
+            window.showSlide(currentSlideIndex + n);
+        }
+
+        window.currentSlide = function(n) {
+            console.log('Jump to slide:', n); // Debug log
+            window.showSlide(n);
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'ArrowLeft') {
+                window.changeSlide(-1);
+            } else if (event.key === 'ArrowRight') {
+                window.changeSlide(1);
+            }
+        });
+
+        // Initialize the slideshow when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, initializing slideshow'); // Debug log
+            setTimeout(function() {
+                window.showSlide(1);
+            }, 100);
+        });
+
+        // Backup initialization
+        window.addEventListener('load', function() {
+            console.log('Window loaded, backup initialization'); // Debug log
+            setTimeout(function() {
+                window.showSlide(1);
+            }, 200);
+        });
+    </script>
+</body>
+</html>
+            
